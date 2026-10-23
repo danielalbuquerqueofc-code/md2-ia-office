@@ -18,6 +18,7 @@ import {
   WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_CLOSE_UNAUTHORIZED,
 } from './constants.js';
+import { registerMd2Routes } from './md2/routes.js';
 import type { PtySessionManager } from './terminal/ptySessionManager.js';
 import { registerTerminalRoutes } from './terminal/terminalRoutes.js';
 import type { AgentState } from './types.js';
@@ -106,6 +107,13 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
   const host = options.host ?? '127.0.0.1';
   const allowedHostnames = privilegedHostnames(host, options.allowedHosts ?? []);
 
+  const md2Enabled =
+    !options.embedded &&
+    process.env['MD2_OFFICE_ENABLED'] === '1' &&
+    options.ptyManager?.enabled !== false;
+  app.get('/api/md2/enabled', async () => ({ enabled: md2Enabled }));
+  if (md2Enabled)
+    registerMd2Routes(app, { token: options.token, store: options.store, allowedHostnames });
   registerHealthRoute(app);
   registerHookRoute(app, options);
   registerWebSocketRoute(app, options, allowedHostnames);

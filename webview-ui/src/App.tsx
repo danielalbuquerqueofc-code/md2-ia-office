@@ -9,6 +9,7 @@ import { DebugView } from './components/DebugView.js';
 import { DirectoryModal } from './components/DirectoryModal.js';
 import { EditActionBar } from './components/EditActionBar.js';
 import { IntroBubble } from './components/IntroBubble.js';
+import { Md2OfficePanel } from './components/Md2OfficePanel.js';
 import { MigrationNotice } from './components/MigrationNotice.js';
 import { SettingsModal } from './components/SettingsModal.js';
 import { TerminalDrawer } from './components/TerminalDrawer.js';
@@ -703,6 +704,7 @@ function App() {
         isMobile && keyboard.clampHeight !== null ? { height: keyboard.clampHeight } : undefined
       }
     >
+      {isBrowserRuntime && !import.meta.env.DEV && <Md2OfficePanel />}
       {isMobile ? (
         <MobileShell
           office={officeRegion}

@@ -50,3 +50,8 @@ agent-orchestrator.yaml
 .ao/
 .serena/
 tasks/
+# Local MD2 task and approval history
+.md2-office/
+
+# Local verification scratch files
+/work/

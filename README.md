@@ -1,3 +1,9 @@
+# MD2 IA Office
+
+Adaptação sobre o repositório oficial Pixel Agents 1.5, com programador Codex, tarefas e aprovações humanas no navegador. [Como iniciar e limites da versão](docs/md2/README.md).
+
+---
+
 <h1 align="center">
   <a href="https://github.com/pixel-agents-hq/pixel-agents/discussions">
     <img src="webview-ui/public/banner.png" alt="Pixel Agents">
