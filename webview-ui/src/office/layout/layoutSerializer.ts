@@ -122,14 +122,18 @@ export function getBlockedTiles(
   return tiles;
 }
 
-/** Get tiles blocked for placement purposes — skips top backgroundTiles rows per item */
+/**
+ * Get tiles blocked for placement purposes — skips top backgroundTiles rows per item.
+ * `excluded` uids don't block (a desk moving together with the items on its
+ * surface excludes the whole group, so the group's own tiles never block the move).
+ */
 export function getPlacementBlockedTiles(
   furniture: PlacedFurniture[],
-  excludeUid?: string,
+  excluded?: ReadonlySet<string>,
 ): Set<string> {
   const tiles = new Set<string>();
   for (const item of furniture) {
-    if (item.uid === excludeUid) continue;
+    if (excluded?.has(item.uid)) continue;
     const entry = getCatalogEntry(item.type);
     if (!entry) continue;
     const bgRows = entry.backgroundTiles || 0;
@@ -346,6 +350,11 @@ function migrateLayout(layout: OfficeLayout): OfficeLayout {
       ...layout,
       tiles: layout.tiles.map((t) => (t === OLD_VOID ? (TileType.VOID as TileTypeVal) : t)),
     };
+  }
+
+  // Default pets to empty array if absent (backward-compat for legacy layouts).
+  if (!layout.pets) {
+    layout = { ...layout, pets: [] };
   }
 
   if (layout.tileColors && layout.tileColors.length === layout.tiles.length) {

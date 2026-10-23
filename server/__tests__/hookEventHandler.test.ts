@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DEFAULT_PROVIDER_ID } from '../../src/providers/providerTypes.js';
-import type { AgentState } from '../../src/types.js';
+import { AgentStateStore } from '../src/agentStateStore.js';
 import { HookEventHandler } from '../src/hookEventHandler.js';
+import { claudeProvider } from '../src/providers/hook/claude/claude.js';
+import { SessionRouter } from '../src/sessionRouter.js';
+import type { AgentState } from '../src/types.js';
 
 /** Minimal AgentState for testing. */
 function createTestAgent(overrides: Partial<AgentState> = {}): AgentState {
@@ -11,7 +13,6 @@ function createTestAgent(overrides: Partial<AgentState> = {}): AgentState {
     sessionId: '',
     terminalRef: undefined,
     isExternal: true,
-    providerId: DEFAULT_PROVIDER_ID,
     projectDir: '/test',
     jsonlFile: '/test/session.jsonl',
     fileOffset: 0,
@@ -21,7 +22,6 @@ function createTestAgent(overrides: Partial<AgentState> = {}): AgentState {
     activeToolNames: new Map(),
     activeSubagentToolIds: new Map(),
     activeSubagentToolNames: new Map(),
-    activeSubagentToolStatuses: new Map(),
     backgroundAgentToolIds: new Set(),
     isWaiting: false,
     permissionSent: false,
@@ -46,22 +46,27 @@ function createMockWebview() {
 }
 
 describe('HookEventHandler', () => {
-  let agents: Map<number, AgentState>;
+  let agents: AgentStateStore;
   let waitingTimers: Map<number, ReturnType<typeof setTimeout>>;
   let permissionTimers: Map<number, ReturnType<typeof setTimeout>>;
   let mockWebview: ReturnType<typeof createMockWebview>;
   let handler: HookEventHandler;
 
   beforeEach(() => {
-    agents = new Map();
+    agents = new AgentStateStore();
     waitingTimers = new Map();
     permissionTimers = new Map();
     mockWebview = createMockWebview();
+    // Wire broadcast subscriber so mockWebview captures store broadcasts
+    agents.on('broadcast', (msg) => {
+      mockWebview.postMessage(msg);
+    });
     handler = new HookEventHandler(
       agents,
       waitingTimers,
       permissionTimers,
-      () => mockWebview as unknown as import('vscode').Webview,
+      claudeProvider,
+      new SessionRouter(),
     );
   });
 
@@ -148,11 +153,13 @@ describe('HookEventHandler', () => {
       (m) => m.type === 'agentStatus' && m.status === 'waiting',
     );
     expect(msg).toBeTruthy();
+    // idle_prompt = waiting on the user -> awaitingInput true ("Waiting for input")
+    expect(msg?.awaitingInput).toBe(true);
   });
 
   // ── Stop ────────────────────────────────────────────────────
 
-  it('Stop marks agent waiting', () => {
+  it('Stop marks agent waiting without awaitingInput (Done)', () => {
     const agent = createTestAgent({ id: 1 });
     agents.set(1, agent);
     handler.registerAgent('sess-1', 1);
@@ -167,6 +174,8 @@ describe('HookEventHandler', () => {
       (m) => m.type === 'agentStatus' && m.status === 'waiting',
     );
     expect(waitMsg).toBeTruthy();
+    // Stop = finished its turn -> awaitingInput falsy ("Done")
+    expect(waitMsg?.awaitingInput).toBeFalsy();
   });
 
   it('Stop clears foreground tools but preserves background agents', () => {
@@ -536,7 +545,7 @@ describe('HookEventHandler', () => {
     handler.setLifecycleCallbacks({ onExternalSessionDetected });
 
     // SessionStart stores as pending
-    handler.handleEvent('codex', {
+    handler.handleEvent('claude', {
       hook_event_name: 'SessionStart',
       session_id: 'ext-sess',
       source: 'startup',
@@ -547,8 +556,7 @@ describe('HookEventHandler', () => {
     expect(onExternalSessionDetected).not.toHaveBeenCalled();
 
     // Simulate the provider creating the agent (callback side effect)
-    onExternalSessionDetected.mockImplementation((providerId: string, sessionId: string) => {
-      expect(providerId).toBe('codex');
+    onExternalSessionDetected.mockImplementation((sessionId: string) => {
       const agent = createTestAgent({
         id: 2,
         sessionId,
@@ -565,7 +573,6 @@ describe('HookEventHandler', () => {
     });
 
     expect(onExternalSessionDetected).toHaveBeenCalledWith(
-      'codex',
       'ext-sess',
       '/projects/test/ext-sess.jsonl',
       '/projects/test',
@@ -711,7 +718,6 @@ describe('HookEventHandler', () => {
     });
 
     expect(onExternalSessionDetected).toHaveBeenCalledWith(
-      'claude',
       'no-transcript-sess',
       undefined,
       '/projects/test',
@@ -755,5 +761,100 @@ describe('HookEventHandler', () => {
 
     // onSessionResume requires transcript_path to clear dismissals
     expect(onSessionResume).not.toHaveBeenCalled();
+  });
+
+  // ── Basic subagent regression (Agent Teams feature OFF) ─────────────
+  // These tests pin down the behavior that must NOT change for basic subagents.
+  // Basic subagents use Agent or Task tool WITHOUT run_in_background=true.
+
+  // PreToolUse(Agent) sets currentHookIsTeammateSpawn iff run_in_background === true.
+  describe.each([
+    { label: 'run_in_background=true', toolInput: { run_in_background: true }, expected: true },
+    { label: 'run_in_background=false', toolInput: { run_in_background: false }, expected: false },
+  ])('PreToolUse(Agent, $label)', ({ toolInput, expected }) => {
+    it(`sets currentHookIsTeammateSpawn=${expected}`, () => {
+      const agent = createTestAgent({ id: 1 });
+      agents.set(1, agent);
+      handler.registerAgent('sess-1', 1);
+
+      handler.handleEvent('claude', {
+        hook_event_name: 'PreToolUse',
+        session_id: 'sess-1',
+        tool_name: 'Agent',
+        tool_input: { description: 'Code review', ...toolInput },
+      });
+
+      expect(agent.currentHookIsTeammateSpawn).toBe(expected);
+    });
+  });
+
+  // SubagentStart routes to teammate discovery ONLY when both conditions hold:
+  // currentHookIsTeammateSpawn === true AND agent.teamName is set (JSONL-confirmed lead).
+  // Basic subagents (no spawn flag) or the external-session false-positive case
+  // (spawn flag set but no teamName) fall through to the basic subagent path.
+  describe.each([
+    {
+      label: 'teammate (spawn flag + teamName)',
+      spawn: true,
+      teamName: 'research',
+      seedActiveTool: false,
+      expectTeammateDetected: true,
+    },
+    {
+      label: 'false-positive guard (spawn flag, no teamName)',
+      spawn: true,
+      teamName: undefined,
+      seedActiveTool: true,
+      expectTeammateDetected: false,
+    },
+    {
+      label: 'basic subagent from hook before JSONL (no activeToolNames parent)',
+      spawn: false,
+      teamName: undefined,
+      seedActiveTool: false,
+      expectTeammateDetected: false,
+    },
+  ])('SubagentStart: $label', ({ spawn, teamName, seedActiveTool, expectTeammateDetected }) => {
+    it(`onTeammateDetected called=${expectTeammateDetected}`, () => {
+      const agent = createTestAgent({
+        id: 1,
+        currentHookIsTeammateSpawn: spawn,
+        ...(teamName ? { teamName } : {}),
+      });
+      if (seedActiveTool) {
+        agent.activeToolNames.set('toolu_real', 'Agent');
+      } else if (!spawn) {
+        agent.currentHookToolId = 'hook-XXX';
+        agent.currentHookToolName = 'Agent';
+      }
+      agents.set(1, agent);
+      handler.registerAgent('sess-1', 1);
+
+      const onTeammateDetected = vi.fn();
+      handler.setLifecycleCallbacks({ onTeammateDetected });
+
+      handler.handleEvent('claude', {
+        hook_event_name: 'SubagentStart',
+        session_id: 'sess-1',
+        agent_type: expectTeammateDetected ? 'web-researcher' : 'general-purpose',
+      });
+
+      if (expectTeammateDetected) {
+        expect(onTeammateDetected).toHaveBeenCalledWith(1, 'sess-1', 'web-researcher');
+        // Teammate path skips subagentToolStart (no ghost sub-agent character).
+        expect(mockWebview.messages.find((m) => m.type === 'subagentToolStart')).toBeUndefined();
+      } else {
+        expect(onTeammateDetected).not.toHaveBeenCalled();
+        const msg = mockWebview.messages.find((m) => m.type === 'subagentToolStart');
+        if (seedActiveTool) {
+          // Basic path with real tool id available.
+          expect(msg).toBeTruthy();
+          expect(msg?.parentToolId).toBe('toolu_real');
+        } else {
+          // No real tool id yet -- JSONL will create the sub-agent character.
+          expect(msg).toBeUndefined();
+        }
+      }
+    });
   });
 });

@@ -16,12 +16,12 @@ Thumbs.db
 # IDE
 .vscode-test/
 /.idea
-/.vscode/launch.json
-/.vscode/tasks.json
 
 # E2E test artifacts
 test-results/
 playwright-report/
+allure-results/
+allure-report/
 
 # Build artifacts
 *.vsix
@@ -32,11 +32,26 @@ playwright-report/
 !.env.example
 
 # Project-specific
-.claude/
-/.claude-flow/
-/.swarm/
+.claude
+.mcp.json
 /sprites-export
-/pixel-agents-dev.code-workspace
+.vercel/
+agent-orchestrator.yaml
+.worktrees
 
 # Local notes (not for commit)
 /notes/
+/docs/e2e-*.md
+!/docs/e2e-claude-mocking.md
+
+.playwright-mcp/
+
+# Agent-orchestrator / tooling scaffolding
+.ao/
+.serena/
+tasks/
+# Local MD2 task and approval history
+.md2-office/
+
+# Local verification scratch files
+/work/

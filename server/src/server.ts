@@ -1,50 +1,57 @@
 import * as crypto from 'crypto';
+import type { FastifyInstance } from 'fastify';
 import * as fs from 'fs';
-import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 
+import type { AgentRuntime } from './agentRuntime.js';
+import type { AgentStateStore } from './agentStateStore.js';
+import type {
+  AssetCache,
+  ReloadAssetsSideEffect,
+  SetHooksEnabledSideEffect,
+} from './clientMessageHandler.js';
 import {
-  HOOK_API_PREFIX,
-  MAX_HOOK_BODY_SIZE,
   SERVER_JSON_DIR,
   SERVER_JSON_NAME,
+  SERVER_REGISTRY_PROTOCOL_VERSION,
+  SERVERS_DIR,
 } from './constants.js';
+import { createHttpServer } from './httpServer.js';
+import type { ServerConfig, StandaloneAccess } from './serverConfig.js';
+import { isServerConfig, isServerTarget, sameStandaloneAccess } from './serverConfig.js';
+import { loadOrCreateStandaloneToken } from './serverToken.js';
+import type { PtySessionManager } from './terminal/ptySessionManager.js';
+import { normalizeHostname } from './wsAuth.js';
 
-/** Discovery file written to ~/.pixel-agents/server.json so hook scripts can find the server. */
-export interface ServerConfig {
-  /** Port the HTTP server is listening on */
-  port: number;
-  /** PID of the process that owns the server */
-  pid: number;
-  /** Auth token required in Authorization header for hook requests */
-  token: string;
-  /** Timestamp (ms) when the server started */
-  startedAt: number;
-}
+export type { ServerConfig } from './serverConfig.js';
 
 /** Callback invoked when a hook event is received from a provider's hook script. */
 type HookEventCallback = (providerId: string, event: Record<string, unknown>) => void;
 
 /**
- * HTTP server that receives hook events from CLI tool hook scripts.
+ * Pixel Agents server: receives hook events, broadcasts state via WebSocket,
+ * and optionally serves the SPA in standalone mode.
  *
- * Routes:
+ * Routes (via Fastify in httpServer.ts):
  * - `POST /api/hooks/:providerId` -- hook event (auth required, 64KB body limit)
  * - `GET /api/health` -- health check (no auth)
+ * - `GET /ws` -- WebSocket for real-time agent state (auth required)
  *
- * Discovery: writes `~/.pixel-agents/server.json` with port, PID, and auth token.
- * Multi-window: second VS Code window detects running server via server.json and
- * reuses it (does not start a second server).
- *
- * This will becomes the standalone server with added WebSocket and SPA serving.
+ * Discovery: writes `~/.pixel-agents/server.json` (legacy single-target pointer)
+ * and `~/.pixel-agents/servers/<pid>-<port>.json` (multi-server registry entry)
+ * with port, PID, auth token, and capability flags.
+ * Multi-window / multi-surface: a second instance detects running servers via
+ * the registry and reuses one only when it offers the same capability
+ * (embedded reuses embedded, standalone reuses standalone) -- an embedded
+ * VS Code server and a standalone `npx pixel-agents` server can run at once,
+ * each owning its own registry entry, both reachable by hook fan-out.
  */
 export class PixelAgentsServer {
-  private server: http.Server | null = null;
+  private app: FastifyInstance | null = null;
   private config: ServerConfig | null = null;
   private ownsServer = false;
   private callback: HookEventCallback | null = null;
-  private startTime = Date.now();
 
   /** Register a callback for incoming hook events from any provider. */
   onHookEvent(callback: HookEventCallback): void {
@@ -52,69 +59,127 @@ export class PixelAgentsServer {
   }
 
   /**
-   * Start the HTTP server. If another instance is already running (detected via
-   * server.json PID check), reuses that server's config without starting a new one.
-   * @returns The server config (port, token) for hook script discovery.
+   * Start the server. If a compatible instance is already running (detected via
+   * the multi-server registry), reuses its config without starting a new one.
    */
-  async start(): Promise<ServerConfig> {
-    // Check if another instance already has a server running
-    const existing = this.readServerJson();
-    if (existing && isProcessRunning(existing.pid)) {
-      // Another VS Code window owns the server, reuse its config
-      this.config = existing;
+  async start(options?: {
+    store?: AgentStateStore;
+    runtime?: AgentRuntime;
+    embedded?: boolean;
+    host?: string;
+    port?: number;
+    staticDir?: string;
+    assetCache?: AssetCache;
+    onSetHooksEnabled?: SetHooksEnabledSideEffect;
+    onReloadAssets?: ReloadAssetsSideEffect;
+    ptyManager?: PtySessionManager;
+    /** Extra privileged Host names (standalone; see wsAuth.privilegedHostnames). */
+    allowedHosts?: readonly string[];
+    /** Replace the persisted standalone token, revoking every URL that carried
+     *  the old one. Refused while another standalone server is running: it
+     *  would keep honouring the old token until it restarts. */
+    rotateToken?: boolean;
+  }): Promise<ServerConfig> {
+    const embedded = options?.embedded ?? true;
+    const wantsSpa = !embedded;
+    const host = options?.host ?? '127.0.0.1';
+    const standalone: StandaloneAccess | undefined = embedded
+      ? undefined
+      : {
+          terminal: options?.ptyManager?.enabled ?? false,
+          host,
+          allowedHosts: normalizedAllowedHosts(options?.allowedHosts ?? []),
+        };
+
+    // Capability-based reuse: an embedded (VS Code) caller only reuses another
+    // embedded server (today's multi-window sharing); a standalone caller only
+    // reuses another standalone -- never across the boundary, which is what
+    // used to leave a standalone attached to VS Code's SPA-less embedded
+    // server (blank page). A standalone caller additionally requires the SAME
+    // access (terminal on/off, bind host, allowed hosts): reusing a server with
+    // a shell for a `--no-terminal` launch would make the opt-out a lie. Prune
+    // dead entries first so a crashed server's stale file never blocks
+    // discovery of a live one.
+    const registry = this.readAndPruneRegistry();
+    if (options?.rotateToken && !embedded) {
+      const running = registry.find((e) => e.servesSpa);
+      if (running) {
+        throw new Error(
+          `A standalone server is already running (PID ${running.pid}, port ${running.port}) and would keep accepting the old token. Stop it, then run --rotate-token again.`,
+        );
+      }
+    }
+    const candidate = registry.find(
+      (e) => e.servesSpa === wantsSpa && sameStandaloneAccess(e.standalone, standalone),
+    );
+    if (candidate) {
+      this.config = candidate;
       this.ownsServer = false;
       console.log(
-        `[Pixel Agents] Reusing existing server on port ${existing.port} (PID ${existing.pid})`,
+        `[Pixel Agents] Reusing existing ${wantsSpa ? 'standalone' : 'embedded'} server on port ${candidate.port} (PID ${candidate.pid})`,
       );
-      return existing;
+      return candidate;
     }
 
     // Start our own server
-    const token = crypto.randomUUID();
-    this.startTime = Date.now();
+    // Standalone keeps one token across restarts so the tokened URL the CLI
+    // prints stays valid; embedded hands its token to the webview in-process and
+    // gains nothing from persistence.
+    const token = embedded
+      ? crypto.randomUUID()
+      : loadOrCreateStandaloneToken({ rotate: options?.rotateToken ?? false });
+    const store = options?.store;
 
-    return new Promise((resolve, reject) => {
-      this.server = http.createServer((req, res) => {
-        this.handleRequest(req, res);
-      });
-
-      this.server.on('error', reject);
-      this.server.setTimeout(5000);
-
-      this.server.listen(0, '127.0.0.1', () => {
-        const addr = this.server?.address();
-        if (addr && typeof addr === 'object') {
-          this.config = {
-            port: addr.port,
-            pid: process.pid,
-            token,
-            startedAt: this.startTime,
-          };
-          this.ownsServer = true;
-          this.writeServerJson(this.config);
-          // Replace startup error handler with runtime error handler
-          this.server!.removeListener('error', reject);
-          this.server!.on('error', (err) => {
-            console.error(`[Pixel Agents] Server: error: ${err}`);
-          });
-          console.log(`[Pixel Agents] Server: listening on 127.0.0.1:${addr.port}`);
-          resolve(this.config);
-        } else {
-          reject(new Error('Failed to get server address'));
-        }
-      });
+    const { app, port } = await createHttpServer({
+      embedded,
+      host,
+      port: options?.port,
+      token,
+      store: store!,
+      runtime: options?.runtime,
+      staticDir: options?.staticDir,
+      assetCache: options?.assetCache,
+      onHookEvent: (providerId, event) => this.callback?.(providerId, event),
+      onSetHooksEnabled: options?.onSetHooksEnabled,
+      onReloadAssets: options?.onReloadAssets,
+      ptyManager: options?.ptyManager,
+      allowedHosts: standalone?.allowedHosts,
     });
+
+    this.app = app;
+    this.config = {
+      port,
+      pid: process.pid,
+      token,
+      startedAt: Date.now(),
+      servesSpa: wantsSpa,
+      protocol: SERVER_REGISTRY_PROTOCOL_VERSION,
+      ...(standalone ? { standalone } : {}),
+      // Diagnostic-only: forward the debug-log path to the hook script via
+      // server.json (env vars don't reach the spawned hook reliably).
+      ...(process.env['PIXEL_AGENTS_DEBUG_LOG']
+        ? { debugLog: process.env['PIXEL_AGENTS_DEBUG_LOG'] }
+        : {}),
+    };
+    this.ownsServer = true;
+    // Dual-write: legacy single-target pointer (old hook scripts) + registry
+    // entry (new hook scripts fan out to every entry here).
+    this.writeServerJson(this.config);
+    this.writeRegistryEntry(this.config);
+    console.log(`[Pixel Agents] Server: listening on 127.0.0.1:${port}`);
+
+    return this.config;
   }
 
-  /** Stop the HTTP server and clean up server.json (only if we own it). */
+  /** Stop the server and clean up its discovery records (only if we own them). */
   stop(): void {
-    if (this.server) {
-      this.server.close();
-      this.server = null;
+    if (this.app) {
+      this.app.close();
+      this.app = null;
     }
-    // Only delete server.json if we own it (our PID)
     if (this.ownsServer) {
       this.deleteServerJson();
+      this.deleteRegistryEntry();
     }
     this.config = null;
     this.ownsServer = false;
@@ -125,107 +190,9 @@ export class PixelAgentsServer {
     return this.config;
   }
 
-  /** Top-level request router. Dispatches to health or hook handler based on method + path. */
-  private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-    const url = req.url ?? '';
-
-    // Health endpoint (no auth required)
-    if (req.method === 'GET' && url === '/api/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          status: 'ok',
-          uptime: Math.floor((Date.now() - this.startTime) / 1000),
-          pid: process.pid,
-        }),
-      );
-      return;
-    }
-
-    // Hook event endpoint: POST /api/hooks/:providerId
-    if (req.method === 'POST' && url.startsWith(HOOK_API_PREFIX + '/')) {
-      this.handleHookRequest(req, res, url);
-      return;
-    }
-
-    res.writeHead(404);
-    res.end();
-  }
-
-  /** Handle POST /api/hooks/:providerId. Validates auth, enforces body size limit, parses JSON. */
-  private handleHookRequest(
-    req: http.IncomingMessage,
-    res: http.ServerResponse,
-    url: string,
-  ): void {
-    // Validate auth token (timing-safe comparison prevents side-channel attacks)
-    const authHeader = req.headers['authorization'] ?? '';
-    const expectedToken = `Bearer ${this.config?.token ?? ''}`;
-    const authBuf = Buffer.from(authHeader);
-    const expectedBuf = Buffer.from(expectedToken);
-    if (authBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(authBuf, expectedBuf)) {
-      res.writeHead(401);
-      res.end('unauthorized');
-      return;
-    }
-
-    // Extract and validate provider ID from URL: /api/hooks/claude -> "claude"
-    const providerId = url.slice(HOOK_API_PREFIX.length + 1);
-    if (!providerId || !/^[a-z0-9-]+$/.test(providerId)) {
-      res.writeHead(400);
-      res.end('invalid provider id');
-      return;
-    }
-
-    // Read body with size limit and response guard
-    let body = '';
-    let bodySize = 0;
-    let responded = false;
-
-    req.on('data', (chunk: Buffer) => {
-      bodySize += chunk.length;
-      if (bodySize > MAX_HOOK_BODY_SIZE && !responded) {
-        responded = true;
-        res.writeHead(413);
-        res.end('payload too large');
-        req.destroy();
-        return;
-      }
-      if (!responded) {
-        body += chunk.toString();
-      }
-    });
-
-    req.on('end', () => {
-      if (responded) return;
-      try {
-        const event = JSON.parse(body) as Record<string, unknown>;
-        if (event.session_id && event.hook_event_name) {
-          this.callback?.(providerId, event);
-        }
-        res.writeHead(200);
-        res.end('ok');
-      } catch {
-        res.writeHead(400);
-        res.end('invalid json');
-      }
-    });
-  }
-
   /** Returns the absolute path to ~/.pixel-agents/server.json. */
   private getServerJsonPath(): string {
     return path.join(os.homedir(), SERVER_JSON_DIR, SERVER_JSON_NAME);
-  }
-
-  /** Read and parse server.json. Returns null if missing or malformed. */
-  private readServerJson(): ServerConfig | null {
-    try {
-      const filePath = this.getServerJsonPath();
-      if (!fs.existsSync(filePath)) return null;
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as ServerConfig;
-    } catch {
-      return null;
-    }
   }
 
   /** Write server.json atomically (tmp + rename) with mode 0o600. */
@@ -236,7 +203,6 @@ export class PixelAgentsServer {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
-      // Atomic write with restricted permissions
       const tmpPath = filePath + '.tmp';
       fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2), { mode: 0o600 });
       fs.renameSync(tmpPath, filePath);
@@ -245,20 +211,119 @@ export class PixelAgentsServer {
     }
   }
 
-  /** Delete server.json only if the PID inside matches our process (safe for multi-window). */
+  /**
+   * Delete the legacy server.json only if the PID inside matches our process
+   * (safe for multi-window / multi-server: never removes another server's
+   * pointer). Known gap during mixed-version skew (A2): because this file is
+   * a single pointer, whichever server most recently (re)claimed it "owns"
+   * it -- if that server later stops while a DIFFERENT, still-live server
+   * coexists, this deletes the only pointer an old (pre-registry) hook
+   * script can find, even though a compatible server is still running. The
+   * registry (servers/) doesn't have this problem -- each entry is deleted
+   * strictly self-only (D6) and a new hook script always prefers it over
+   * this legacy file. Accepted: A2 already treats "an old script reaches at
+   * most one server" as the baseline degradation for this skew window.
+   */
   private deleteServerJson(): void {
     try {
       const filePath = this.getServerJsonPath();
       if (!fs.existsSync(filePath)) return;
-      // Only delete if our PID matches (don't delete another instance's server file)
-      const existing = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as ServerConfig;
-      if (existing.pid === process.pid) {
+      const existing = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
+      if (isServerTarget(existing) && existing.pid === process.pid) {
         fs.unlinkSync(filePath);
       }
     } catch {
       // File may already be gone
     }
   }
+
+  /** Returns the absolute path to ~/.pixel-agents/servers/. */
+  private getRegistryDir(): string {
+    return path.join(os.homedir(), SERVER_JSON_DIR, SERVERS_DIR);
+  }
+
+  /** Returns the absolute path to this config's registry entry file. Keyed on
+   *  pid+port (not pid alone) so two servers started in the same process --
+   *  which happens in tests, never in production where pids are unique per
+   *  process -- still get distinct, non-colliding registry files. */
+  private getRegistryFilePath(config: Pick<ServerConfig, 'pid' | 'port'>): string {
+    return path.join(this.getRegistryDir(), `${config.pid}-${config.port}.json`);
+  }
+
+  /**
+   * Read every registry entry, pruning (deleting) any whose owning PID is no
+   * longer alive -- so a crashed server's stale file never blocks discovery
+   * or gets fanned out to by the hook script. Malformed/mid-write files are
+   * treated the same as dead entries and removed. Returns only live entries.
+   */
+  private readAndPruneRegistry(): ServerConfig[] {
+    const dir = this.getRegistryDir();
+    let files: string[];
+    try {
+      files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    } catch {
+      return []; // Directory doesn't exist yet -- no live servers registered.
+    }
+
+    const live: ServerConfig[] = [];
+    for (const file of files) {
+      const filePath = path.join(dir, file);
+      try {
+        const entry = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
+        if (!isServerConfig(entry)) {
+          fs.unlinkSync(filePath);
+          continue;
+        }
+        if (isProcessRunning(entry.pid)) {
+          live.push(entry);
+        } else {
+          fs.unlinkSync(filePath);
+        }
+      } catch {
+        try {
+          fs.unlinkSync(filePath);
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+    return live;
+  }
+
+  /** Write this server's registry entry atomically (tmp + rename) with mode 0o600. */
+  private writeRegistryEntry(config: ServerConfig): void {
+    const dir = this.getRegistryDir();
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      }
+      const filePath = this.getRegistryFilePath(config);
+      const tmpPath = `${filePath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+      fs.renameSync(tmpPath, filePath);
+    } catch (e) {
+      console.error(`[Pixel Agents] Failed to write registry entry: ${e}`);
+    }
+  }
+
+  /** Delete this server's own registry entry (self-only cleanup, mirrors deleteServerJson). */
+  private deleteRegistryEntry(): void {
+    if (!this.config) return;
+    try {
+      const filePath = this.getRegistryFilePath(this.config);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {
+      // File may already be gone
+    }
+  }
+}
+
+/** Allowed hosts as compared and recorded: normalized, de-duplicated, sorted,
+ *  so `--allowed-host A --allowed-host b` and `--allowed-host B --allowed-host a`
+ *  describe the same server. */
+function normalizedAllowedHosts(hosts: readonly string[]): string[] {
+  const names = hosts.map((h) => normalizeHostname(h)).filter((h): h is string => h !== null);
+  return [...new Set(names)].sort();
 }
 
 /** Check if a process is alive by sending signal 0 (no-op, just checks existence). */

@@ -1,14 +1,22 @@
 import type { ColorValue } from '../../components/ui/types.js';
 import {
+  AREA_ACTIVE_ALPHA_MULTIPLIER,
+  AREA_LABEL_ALPHA,
+  AREA_LABEL_FALLBACK_COLOR,
+  AREA_LABEL_FONT_SIZE_PX,
+  AREA_LABEL_MIN_FONT_SIZE_PX,
+  AREA_LABEL_SHADOW_ALPHA,
+  AREA_LABEL_SHADOW_COLOR,
+  AREA_OVERLAY_ALPHA,
   BUBBLE_FADE_DURATION_SEC,
-  BUBBLE_SITTING_OFFSET_PX,
-  BUBBLE_VERTICAL_OFFSET_PX,
   BUTTON_ICON_COLOR,
   BUTTON_ICON_SIZE_FACTOR,
   BUTTON_LINE_WIDTH_MIN,
   BUTTON_LINE_WIDTH_ZOOM_FACTOR,
   BUTTON_MIN_RADIUS,
   BUTTON_RADIUS_ZOOM_FACTOR,
+  CARPET_DEFAULT_ACCENT_COLOR,
+  CARPET_DEFAULT_COLOR,
   CHARACTER_SITTING_OFFSET_PX,
   CHARACTER_Z_SORT_OFFSET,
   DELETE_BUTTON_BG,
@@ -21,6 +29,7 @@ import {
   GHOST_PREVIEW_TINT_ALPHA,
   GHOST_VALID_TINT,
   GRID_LINE_COLOR,
+  HEADLESS_CHARACTER_ALPHA,
   HOVERED_OUTLINE_ALPHA,
   OUTLINE_Z_SORT_OFFSET,
   ROTATE_BUTTON_BG,
@@ -34,15 +43,21 @@ import {
   VOID_TILE_OUTLINE_COLOR,
 } from '../../constants.js';
 import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles.js';
-import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js';
+import { mapOffset } from '../projection.js';
 import {
-  BUBBLE_PERMISSION_SPRITE,
-  BUBBLE_WAITING_SPRITE,
-  getCharacterSprites,
-} from '../sprites/spriteData.js';
+  getCarpetJunctionSprite,
+  getCarpetPaletteKey,
+  hasCarpetSprites,
+} from '../sprites/carpetTiles.js';
+import { getPetSprites } from '../sprites/petSpriteData.js';
+import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js';
+import { BUBBLE_HEART_SPRITE, getCharacterSprites } from '../sprites/spriteData.js';
 import type {
+  AreaDefinition,
+  CarpetTile,
   Character,
   FurnitureInstance,
+  Pet,
   Seat,
   SpriteData,
   TileType as TileTypeVal,
@@ -51,8 +66,227 @@ import { CharacterState, TILE_SIZE, TileType } from '../types.js';
 import { getWallInstances, hasWallSprites, wallColorToHex } from '../wallTiles.js';
 import { getCharacterSprite } from './characters.js';
 import { renderMatrixEffect } from './matrixEffect.js';
+import { getPetSpriteData } from './petEntity.js';
+
+// ── Settings ────────────────────────────────────────────────────
+
+/**
+ * "Display headless as ghosts" — whether headless agents render translucent.
+ * Module state rather than a render param: the rAF loop reads it every frame,
+ * so a toggle takes effect on the next one without threading a 21st argument
+ * through renderFrame. Same shape as setProviderCapabilities / setSoundEnabled.
+ * Mirrors the server default (off) — the cue is opt-in, so an office looks the
+ * same as it did before the setting existed until someone turns it on.
+ */
+let ghostHeadlessAgents = false;
+
+export function setGhostHeadlessAgents(enabled: boolean): void {
+  ghostHeadlessAgents = enabled;
+}
+
+export function isGhostHeadlessAgentsEnabled(): boolean {
+  return ghostHeadlessAgents;
+}
 
 // ── Render functions ────────────────────────────────────────────
+
+/**
+ * Render the carpet layer. Called AFTER renderTileGrid and BEFORE seat
+ * indicators / characters / furniture.
+ *
+ * Per junction (cols+1 × rows+1 grid of corners), we gather every
+ * (variant, palette) pair from the up-to-4 adjacent tiles. Each pair becomes
+ * one local "layer" drawn in ascending `order`, so the highest-order carpet
+ * visually wins at overlaps. Sprite anchor: each 16×16 junction sprite is
+ * centered on the corner — drawn at (offsetX + jx*s - halfS, offsetY + jy*s - halfS).
+ *
+ * @internal
+ */
+export function renderCarpetLayer(
+  ctx: CanvasRenderingContext2D,
+  carpetTiles: Array<CarpetTile | null>,
+  cols: number,
+  rows: number,
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+): void {
+  if (!hasCarpetSprites()) return;
+  if (!carpetTiles || carpetTiles.length === 0) return;
+
+  const s = TILE_SIZE * zoom;
+  const halfS = s / 2;
+
+  for (let jy = 0; jy <= rows; jy++) {
+    for (let jx = 0; jx <= cols; jx++) {
+      const localGroups = new Map<
+        string,
+        {
+          variant: number;
+          color: ColorValue;
+          accentColor: ColorValue;
+          paletteKey: string;
+          order: number;
+        }
+      >();
+
+      const adjacent = [
+        { col: jx - 1, row: jy - 1 }, // NW
+        { col: jx, row: jy - 1 }, // NE
+        { col: jx, row: jy }, // SE
+        { col: jx - 1, row: jy }, // SW
+      ];
+
+      for (const pos of adjacent) {
+        if (pos.col < 0 || pos.row < 0 || pos.col >= cols || pos.row >= rows) continue;
+        const tile = carpetTiles[pos.row * cols + pos.col];
+        if (!tile) continue;
+        const color = tile.color ?? CARPET_DEFAULT_COLOR;
+        const accentColor = tile.accentColor ?? CARPET_DEFAULT_ACCENT_COLOR;
+        const paletteKey = getCarpetPaletteKey(color, accentColor);
+        const key = `${tile.variant}:${paletteKey}`;
+        const order = tile.order ?? 0;
+        const existing = localGroups.get(key);
+        if (!existing || order > existing.order) {
+          localGroups.set(key, { variant: tile.variant, color, accentColor, paletteKey, order });
+        }
+      }
+
+      if (localGroups.size === 0) continue;
+
+      // Ascending order → drawn lowest first; highest-order layer ends on top.
+      const ordered = [...localGroups.values()].sort((a, b) => a.order - b.order);
+      for (const { variant, color, accentColor, paletteKey } of ordered) {
+        const sprite = getCarpetJunctionSprite(
+          jx,
+          jy,
+          variant,
+          carpetTiles,
+          cols,
+          rows,
+          color,
+          accentColor,
+          paletteKey,
+        );
+        if (!sprite) continue;
+        const cached = getCachedSprite(sprite, zoom);
+        ctx.drawImage(cached, offsetX + jx * s - halfS, offsetY + jy * s - halfS);
+      }
+    }
+  }
+}
+
+/**
+ * Translucent per-tile color wash for Areas. Runs ABOVE carpets/floor and
+ * BELOW seat indicators / characters / furniture. The active area (the one
+ * the editor has currently selected) gets a multiplier-bumped alpha so users
+ * can see which area they're editing without changing every other area's
+ * visibility.
+ *
+ * @internal
+ */
+export function renderAreaOverlay(
+  ctx: CanvasRenderingContext2D,
+  areaTiles: Array<string | null> | undefined,
+  areas: AreaDefinition[] | undefined,
+  cols: number,
+  rows: number,
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+  activeAreaLabel?: string | null,
+): void {
+  if (!areaTiles || areaTiles.length === 0) return;
+  if (!areas || areas.length === 0) return;
+
+  const s = TILE_SIZE * zoom;
+  const colorMap = new Map<string, string>();
+  for (const a of areas) colorMap.set(a.label, a.color);
+
+  ctx.save();
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const label = areaTiles[r * cols + c];
+      if (!label) continue;
+      const color = colorMap.get(label);
+      if (!color) continue;
+      ctx.globalAlpha =
+        activeAreaLabel === label
+          ? AREA_OVERLAY_ALPHA * AREA_ACTIVE_ALPHA_MULTIPLIER
+          : AREA_OVERLAY_ALPHA;
+      ctx.fillStyle = color;
+      ctx.fillRect(offsetX + c * s, offsetY + r * s, s, s);
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * Render the centroid label for each Area, ABOVE characters/bubbles. Centroid
+ * = arithmetic mean of all tile centers belonging to a given label. Pixel-art
+ * drop shadow (no blur) for legibility on light backgrounds.
+ *
+ * @internal
+ */
+export function renderAreaLabels(
+  ctx: CanvasRenderingContext2D,
+  areaTiles: Array<string | null> | undefined,
+  areas: AreaDefinition[] | undefined,
+  cols: number,
+  rows: number,
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+): void {
+  if (!areaTiles || areaTiles.length === 0) return;
+  if (!areas || areas.length === 0) return;
+
+  const s = TILE_SIZE * zoom;
+  const colorMap = new Map<string, string>();
+  for (const a of areas) colorMap.set(a.label, a.color);
+
+  // Centroid accumulator: label → { sumX, sumY, count }.
+  const centroids = new Map<string, { sumX: number; sumY: number; count: number }>();
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const label = areaTiles[r * cols + c];
+      if (!label) continue;
+      const acc = centroids.get(label);
+      if (acc) {
+        acc.sumX += c;
+        acc.sumY += r;
+        acc.count += 1;
+      } else {
+        centroids.set(label, { sumX: c, sumY: r, count: 1 });
+      }
+    }
+  }
+
+  if (centroids.size === 0) return;
+
+  const fontSize = Math.max(AREA_LABEL_FONT_SIZE_PX * zoom, AREA_LABEL_MIN_FONT_SIZE_PX);
+
+  ctx.save();
+  ctx.font = `bold ${fontSize}px 'FS Pixel Sans'`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  for (const [label, acc] of centroids) {
+    const cx = offsetX + (acc.sumX / acc.count + 0.5) * s;
+    const cy = offsetY + (acc.sumY / acc.count + 0.5) * s;
+
+    // Pixel-art drop shadow (1px right + down, no blur).
+    ctx.globalAlpha = AREA_LABEL_SHADOW_ALPHA;
+    ctx.fillStyle = AREA_LABEL_SHADOW_COLOR;
+    ctx.fillText(label, cx + 1, cy + 1);
+
+    // Main label — area's own color, falling back to white if missing.
+    ctx.globalAlpha = AREA_LABEL_ALPHA;
+    ctx.fillStyle = colorMap.get(label) ?? AREA_LABEL_FALLBACK_COLOR;
+    ctx.fillText(label, cx, cy);
+  }
+  ctx.restore();
+}
 
 /** @internal */
 export function renderTileGrid(
@@ -116,6 +350,7 @@ export function renderScene(
   zoom: number,
   selectedAgentId: number | null,
   hoveredAgentId: number | null,
+  pets: Pet[] = [],
 ): void {
   const drawables: ZDrawable[] = [];
 
@@ -161,6 +396,10 @@ export function renderScene(
     // at lower rows (e.g. desks, bookshelves that occlude from below).
     const charZY = ch.y + TILE_SIZE / 2 + CHARACTER_Z_SORT_OFFSET;
 
+    // Headless agents (adopted, no terminal to focus) render translucent while
+    // the "Display headless as ghosts" setting is on.
+    const alpha = ch.isHeadless && ghostHeadlessAgents ? HEADLESS_CHARACTER_ALPHA : 1;
+
     // Matrix spawn/despawn effect — skip outline, use per-pixel rendering
     if (ch.matrixEffect) {
       const mDrawX = drawX;
@@ -170,7 +409,10 @@ export function renderScene(
       drawables.push({
         zY: charZY,
         draw: (c) => {
+          c.save();
+          c.globalAlpha = alpha;
           renderMatrixEffect(c, mCh, mSpriteData, mDrawX, mDrawY, zoom);
+          c.restore();
         },
       });
       continue;
@@ -198,6 +440,36 @@ export function renderScene(
 
     drawables.push({
       zY: charZY,
+      draw: (c) => {
+        if (alpha === 1) {
+          c.drawImage(cached, drawX, drawY);
+          return;
+        }
+        c.save();
+        c.globalAlpha = alpha;
+        c.drawImage(cached, drawX, drawY);
+        c.restore();
+      },
+    });
+  }
+
+  // ── Pets ──────────────────────────────────────────────
+  for (const pet of pets) {
+    const petSprites = getPetSprites(pet.petType);
+    const spriteData = getPetSpriteData(pet, petSprites);
+    if (!spriteData) continue;
+
+    const cached = getCachedSprite(spriteData, zoom);
+    // Anchor at bottom-center at (pet.x, pet.y) — round to integer device pixels
+    const drawX = Math.round(offsetX + pet.x * zoom - cached.width / 2);
+    const drawY = Math.round(offsetY + pet.y * zoom - cached.height);
+
+    // Z-sort key: matches the chair/character "row boundary" formula.
+    // pet.y is the pixel center, so + TILE_SIZE/2 lifts us to the row's bottom edge.
+    const petZY = pet.y + TILE_SIZE / 2;
+
+    drawables.push({
+      zY: petZY,
       draw: (c) => {
         c.drawImage(cached, drawX, drawY);
       },
@@ -485,35 +757,35 @@ function renderRotateButton(
 }
 
 // ── Speech bubbles ──────────────────────────────────────────────
+// Character bubbles (permission dots / done checkmark) are rendered by
+// ToolOverlay as DOM elements so they stack ABOVE the DOM status labels —
+// canvas content can never out-paint the DOM overlay. Pet heart bubbles stay
+// here: pets have no overlay labels to collide with.
 
-function renderBubbles(
+function renderPetBubbles(
   ctx: CanvasRenderingContext2D,
-  characters: Character[],
+  pets: Pet[],
   offsetX: number,
   offsetY: number,
   zoom: number,
 ): void {
-  for (const ch of characters) {
-    if (!ch.bubbleType) continue;
+  for (const pet of pets) {
+    if (!pet.bubbleType) continue;
 
-    const sprite =
-      ch.bubbleType === 'permission' ? BUBBLE_PERMISSION_SPRITE : BUBBLE_WAITING_SPRITE;
+    const sprite = BUBBLE_HEART_SPRITE;
 
-    // Compute opacity: permission = full, waiting = fade in last 0.5s
+    // Fade in the last BUBBLE_FADE_DURATION_SEC of the lifetime
     let alpha = 1.0;
-    if (ch.bubbleType === 'waiting' && ch.bubbleTimer < BUBBLE_FADE_DURATION_SEC) {
-      alpha = ch.bubbleTimer / BUBBLE_FADE_DURATION_SEC;
+    if (pet.bubbleTimer < BUBBLE_FADE_DURATION_SEC) {
+      alpha = Math.max(0, pet.bubbleTimer / BUBBLE_FADE_DURATION_SEC);
     }
 
     const cached = getCachedSprite(sprite, zoom);
-    // Position: centered above the character's head
-    // Character is anchored bottom-center at (ch.x, ch.y), sprite is 16x24
-    // Place bubble above head with a small gap; follow sitting offset
-    const sittingOff = ch.state === CharacterState.TYPE ? BUBBLE_SITTING_OFFSET_PX : 0;
-    const bubbleX = Math.round(offsetX + ch.x * zoom - cached.width / 2);
-    const bubbleY = Math.round(
-      offsetY + (ch.y + sittingOff - BUBBLE_VERTICAL_OFFSET_PX) * zoom - cached.height - 1 * zoom,
-    );
+    // Anchor: centered above the pet's head. Pet is anchored bottom-center at
+    // (pet.x, pet.y); sprite is ~16 tall, so back up TILE_SIZE pixels and add
+    // a 1-sprite-pixel gap (scaled by zoom).
+    const bubbleX = Math.round(offsetX + pet.x * zoom - cached.width / 2);
+    const bubbleY = Math.round(offsetY + (pet.y - TILE_SIZE) * zoom - cached.height - 1 * zoom);
 
     ctx.save();
     if (alpha < 1.0) ctx.globalAlpha = alpha;
@@ -534,12 +806,22 @@ export interface ButtonBounds {
 export type DeleteButtonBounds = ButtonBounds;
 export type RotateButtonBounds = ButtonBounds;
 
+/** One translucent preview sprite at a target tile. */
+export interface GhostSprite {
+  sprite: SpriteData;
+  col: number;
+  row: number;
+  mirrored: boolean;
+}
+
 export interface EditorRenderState {
   showGrid: boolean;
-  ghostSprite: SpriteData | null;
-  ghostMirrored: boolean;
-  ghostCol: number;
-  ghostRow: number;
+  /**
+   * Preview sprites, drawn in order with one shared validity tint: the item
+   * being placed, or a dragged item followed by everything riding on it — the
+   * group previews (and is accepted or refused) as one.
+   */
+  ghosts: GhostSprite[];
   ghostValid: boolean;
   selectedCol: number;
   selectedRow: number;
@@ -582,6 +864,12 @@ export function renderFrame(
   tileColors?: Array<ColorValue | null>,
   layoutCols?: number,
   layoutRows?: number,
+  carpetTiles?: Array<CarpetTile | null>,
+  areas?: AreaDefinition[],
+  areaTiles?: Array<string | null>,
+  showAreas?: boolean,
+  activeAreaLabel?: string | null,
+  pets?: Pet[],
 ): { offsetX: number; offsetY: number } {
   // Clear
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -590,14 +878,22 @@ export function renderFrame(
   const cols = layoutCols ?? (tileMap.length > 0 ? tileMap[0].length : 0);
   const rows = layoutRows ?? tileMap.length;
 
-  // Center map in viewport + pan offset (integer device pixels)
-  const mapW = cols * TILE_SIZE * zoom;
-  const mapH = rows * TILE_SIZE * zoom;
-  const offsetX = Math.floor((canvasWidth - mapW) / 2) + Math.round(panX);
-  const offsetY = Math.floor((canvasHeight - mapH) / 2) + Math.round(panY);
+  // Center map in viewport + pan offset (integer device pixels). Shared with
+  // the DOM overlays so a label lands exactly on the sprite it belongs to.
+  const { offsetX, offsetY } = mapOffset(canvasWidth, canvasHeight, cols, rows, zoom, panX, panY);
 
   // Draw tiles (floor + wall base color)
   renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom, tileColors, layoutCols);
+
+  // Carpet layer (above floor, below seat indicators / furniture / characters)
+  if (carpetTiles && carpetTiles.length > 0) {
+    renderCarpetLayer(ctx, carpetTiles, cols, rows, offsetX, offsetY, zoom);
+  }
+
+  // Area overlay (translucent color wash) — above carpets, below seat indicators
+  if (showAreas) {
+    renderAreaOverlay(ctx, areaTiles, areas, cols, rows, offsetX, offsetY, zoom, activeAreaLabel);
+  }
 
   // Seat indicators (below furniture/characters, on top of floor)
   if (selection) {
@@ -620,10 +916,28 @@ export function renderFrame(
   // Draw walls + furniture + characters (z-sorted)
   const selectedId = selection?.selectedAgentId ?? null;
   const hoveredId = selection?.hoveredAgentId ?? null;
-  renderScene(ctx, allFurniture, characters, offsetX, offsetY, zoom, selectedId, hoveredId);
+  renderScene(
+    ctx,
+    allFurniture,
+    characters,
+    offsetX,
+    offsetY,
+    zoom,
+    selectedId,
+    hoveredId,
+    pets ?? [],
+  );
 
-  // Speech bubbles (always on top of characters)
-  renderBubbles(ctx, characters, offsetX, offsetY, zoom);
+  // Character speech bubbles render in ToolOverlay (DOM, above the labels).
+  // Pet heart bubbles (canvas overlay pass)
+  if (pets && pets.length > 0) {
+    renderPetBubbles(ctx, pets, offsetX, offsetY, zoom);
+  }
+
+  // Area labels (above bubbles + characters, below editor overlays)
+  if (showAreas) {
+    renderAreaLabels(ctx, areaTiles, areas, cols, rows, offsetX, offsetY, zoom);
+  }
 
   // Editor overlays
   if (editor) {
@@ -642,17 +956,17 @@ export function renderFrame(
         editor.ghostBorderHoverRow,
       );
     }
-    if (editor.ghostSprite && editor.ghostCol >= 0) {
+    for (const ghost of editor.ghosts) {
       renderGhostPreview(
         ctx,
-        editor.ghostSprite,
-        editor.ghostCol,
-        editor.ghostRow,
+        ghost.sprite,
+        ghost.col,
+        ghost.row,
         editor.ghostValid,
         offsetX,
         offsetY,
         zoom,
-        editor.ghostMirrored,
+        ghost.mirrored,
       );
     }
     if (editor.hasSelection) {

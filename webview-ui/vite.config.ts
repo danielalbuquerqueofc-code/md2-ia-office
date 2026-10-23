@@ -5,13 +5,14 @@ import * as path from 'path';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vite';
 
-import { buildAssetIndex, buildFurnitureCatalog } from '../shared/assets/build.ts';
+import { buildAssetIndex, buildFurnitureCatalog } from '../core/src/assets/build.ts';
 import {
+  decodeAllCarpets,
   decodeAllCharacters,
   decodeAllFloors,
   decodeAllFurniture,
   decodeAllWalls,
-} from '../shared/assets/loader.ts';
+} from '../core/src/assets/loader.ts';
 
 // ── Decoded asset cache (invalidated on file change) ─────────────────────────
 
@@ -19,6 +20,7 @@ interface DecodedCache {
   characters: ReturnType<typeof decodeAllCharacters> | null;
   floors: ReturnType<typeof decodeAllFloors> | null;
   walls: ReturnType<typeof decodeAllWalls> | null;
+  carpets: ReturnType<typeof decodeAllCarpets> | null;
   furniture: ReturnType<typeof decodeAllFurniture> | null;
 }
 
@@ -26,19 +28,32 @@ interface DecodedCache {
 
 function browserMockAssetsPlugin(): Plugin {
   const assetsDir = path.resolve(__dirname, 'public/assets');
-  const distAssetsDir = path.resolve(__dirname, '../dist/webview/assets');
+  // Default for production builds; configResolved below rewrites this to
+  // track the actual build.outDir, so vite build calls that override outDir
+  // (e.g. the build-subpath integration test) still receive the JSON sidecars.
+  let distAssetsDir = path.resolve(__dirname, '../dist/webview/assets');
 
-  const cache: DecodedCache = { characters: null, floors: null, walls: null, furniture: null };
+  const cache: DecodedCache = {
+    characters: null,
+    floors: null,
+    walls: null,
+    carpets: null,
+    furniture: null,
+  };
 
   function clearCache(): void {
     cache.characters = null;
     cache.floors = null;
     cache.walls = null;
+    cache.carpets = null;
     cache.furniture = null;
   }
 
   return {
     name: 'browser-mock-assets',
+    configResolved(config) {
+      distAssetsDir = path.resolve(config.root, config.build.outDir, 'assets');
+    },
     configureServer(server) {
       // Strip trailing slash: '/' → '', '/sub/' → '/sub'
       const base = server.config.base.replace(/\/$/, '');
@@ -68,6 +83,11 @@ function browserMockAssetsPlugin(): Plugin {
         cache.walls ??= decodeAllWalls(assetsDir);
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(cache.walls));
+      });
+      server.middlewares.use(`${base}/assets/decoded/carpets.json`, (_req, res) => {
+        cache.carpets ??= decodeAllCarpets(assetsDir);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(cache.carpets));
       });
       server.middlewares.use(`${base}/assets/decoded/furniture.json`, (_req, res) => {
         cache.furniture ??= decodeAllFurniture(assetsDir, buildFurnitureCatalog(assetsDir));
@@ -101,6 +121,11 @@ function browserMockAssetsPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [tailwindcss(), react(), browserMockAssetsPlugin()],
+  server: {
+    // Dev-only: allow reaching `vite --host` from another device on a
+    // Tailscale network (Vite rejects non-localhost Host headers by default).
+    allowedHosts: ['.ts.net'],
+  },
   build: {
     outDir: '../dist/webview',
     emptyOutDir: true,

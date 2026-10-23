@@ -44,7 +44,7 @@ export function clearColorizeCache(): void {
  * 4. Create HSL color with user's hue + saturation
  * 5. Convert HSL -> RGB -> hex
  */
-function colorizeSprite(sprite: SpriteData, color: ColorValue): SpriteData {
+export function colorizeSprite(sprite: SpriteData, color: ColorValue): SpriteData {
   const { h, s, b, c } = color;
   const result: SpriteData = [];
 
@@ -107,9 +107,9 @@ function hslToHex(h: number, s: number, l: number): string {
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const hp = h / 60;
   const x = c * (1 - Math.abs((hp % 2) - 1));
-  let r1 = 0,
-    g1 = 0,
-    b1 = 0;
+  let r1: number;
+  let g1: number;
+  let b1: number;
 
   if (hp < 1) {
     r1 = c;
@@ -160,11 +160,41 @@ function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   if (max === min) return [0, 0, l];
   const d = max - min;
   const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h = 0;
+  let h: number;
   if (max === rf) h = ((gf - bf) / d + (gf < bf ? 6 : 0)) * 60;
   else if (max === gf) h = ((bf - rf) / d + 2) * 60;
   else h = ((rf - gf) / d + 4) * 60;
   return [h, s, l];
+}
+
+/**
+ * Single-color fill: every non-empty pixel becomes the computed HSL color,
+ * preserving the original per-pixel alpha. Used by the carpet renderer to
+ * recolor a masked layer (main or accent) before merging.
+ *
+ * Unlike `colorizeSprite`, source pixel luminance is ignored; output lightness
+ * is derived purely from `color.b` (brightness) and `color.c` (contrast around
+ * the 0.5 midpoint). Caller controls hue + saturation via `color.h` and
+ * `color.s`.
+ */
+export function flatColorizeSprite(sprite: SpriteData, color: ColorValue): SpriteData {
+  const { h, s, b, c } = color;
+  let lightness = 0.5;
+  if (c !== 0) {
+    lightness = 0.5 + (lightness - 0.5) * ((100 + c) / 100);
+  }
+  if (b !== 0) {
+    lightness = lightness + b / 200;
+  }
+  lightness = Math.max(0, Math.min(1, lightness));
+  const hex = hslToHex(h, s / 100, lightness);
+  return sprite.map((row) =>
+    row.map((pixel) => {
+      if (pixel === '') return '';
+      const alpha = extractAlpha(pixel);
+      return appendAlpha(hex, alpha);
+    }),
+  );
 }
 
 /**

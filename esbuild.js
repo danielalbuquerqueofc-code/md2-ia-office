@@ -5,6 +5,14 @@ const path = require('path');
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
 
+/** Extension version read from package.json at build time, inlined via esbuild `define`. */
+const pkgVersion = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8'),
+).version;
+const versionDefine = {
+  'process.env.PIXEL_AGENTS_VERSION': JSON.stringify(pkgVersion),
+};
+
 /**
  * Copy assets folder to dist/assets
  */
@@ -36,7 +44,8 @@ function buildHooks() {
     'server',
     'src',
     'providers',
-    'file',
+    'hook',
+    'claude',
     'hooks',
     'claude-hook.ts',
   );
@@ -54,23 +63,6 @@ function buildHooks() {
 }
 
 /**
- * Bundle provider launch scripts (TypeScript) to dist/providers.
- */
-function buildProviderLaunchers() {
-  const codexEntry = path.join(__dirname, 'src', 'providers', 'codex', 'codexLaunch.ts');
-  if (!fs.existsSync(codexEntry)) return;
-  require('esbuild').buildSync({
-    entryPoints: [{ in: codexEntry, out: 'codex-launch' }],
-    bundle: true,
-    platform: 'node',
-    target: 'node18',
-    format: 'cjs',
-    outdir: path.join(__dirname, 'dist', 'providers'),
-  });
-  console.log('Built providers -> dist/providers/');
-}
-
-/**
  * @type {import('esbuild').Plugin}
  */
 const esbuildProblemMatcherPlugin = {
@@ -85,11 +77,6 @@ const esbuildProblemMatcherPlugin = {
         console.error(`✘ [ERROR] ${text}`);
         console.error(`    ${location.file}:${location.line}:${location.column}:`);
       });
-      if (result.errors.length === 0) {
-        copyAssets();
-        buildHooks();
-        buildProviderLaunchers();
-      }
       console.log('[watch] build finished');
     });
   },
@@ -97,7 +84,7 @@ const esbuildProblemMatcherPlugin = {
 
 async function main() {
   const ctx = await esbuild.context({
-    entryPoints: ['src/extension.ts'],
+    entryPoints: ['adapters/vscode/extension.ts'],
     bundle: true,
     format: 'cjs',
     minify: production,
@@ -106,6 +93,7 @@ async function main() {
     platform: 'node',
     outfile: 'dist/extension.js',
     external: ['vscode'],
+    define: versionDefine,
     logLevel: 'silent',
     plugins: [
       /* add to the end of plugins array */
@@ -117,6 +105,57 @@ async function main() {
   } else {
     await ctx.rebuild();
     await ctx.dispose();
+    // Copy assets and hooks after build
+    copyAssets();
+    buildHooks();
+    await buildCli();
+    await buildUninstall();
+  }
+}
+
+/** Bundle the vscode:uninstall hook — plain Node, runs after extension removal. */
+async function buildUninstall() {
+  await esbuild.build({
+    entryPoints: ['adapters/vscode/uninstall.ts'],
+    bundle: true,
+    format: 'cjs',
+    minify: production,
+    sourcemap: false,
+    platform: 'node',
+    outfile: 'dist/uninstall.js',
+    define: versionDefine,
+    logLevel: 'silent',
+  });
+}
+
+/** Bundle the standalone CLI entry point. */
+async function buildCli() {
+  await esbuild.build({
+    entryPoints: ['server/src/cli.ts'],
+    bundle: true,
+    format: 'cjs',
+    minify: production,
+    sourcemap: !production,
+    platform: 'node',
+    outfile: 'dist/cli.js',
+    external: [
+      'fastify',
+      '@fastify/websocket',
+      '@fastify/static',
+      '@fastify/cors',
+      // Native PTY modules: they ship platform-specific .node binaries that
+      // cannot be bundled, and they're OPTIONAL -- esbuild must not fail the
+      // build when they're absent, and the runtime require() must be left
+      // intact so its failure can be caught and degraded gracefully.
+      // See server/src/terminal/ptyModule.ts.
+      '@lydell/node-pty',
+      'node-pty',
+    ],
+    define: versionDefine,
+    logLevel: 'silent',
+  });
+  if (!production) {
+    console.log('[build] CLI bundled: dist/cli.mjs');
   }
 }
 

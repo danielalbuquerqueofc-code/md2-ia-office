@@ -1,33 +1,58 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { toMajorMinor } from './changelogData.js';
+import { AgentCardBar } from './components/AgentCardBar.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { ChangelogModal } from './components/ChangelogModal.js';
+import { ConnectionIndicator } from './components/ConnectionIndicator.js';
 import { DebugView } from './components/DebugView.js';
+import { DirectoryModal } from './components/DirectoryModal.js';
 import { EditActionBar } from './components/EditActionBar.js';
+import { IntroBubble } from './components/IntroBubble.js';
+import { Md2OfficePanel } from './components/Md2OfficePanel.js';
 import { MigrationNotice } from './components/MigrationNotice.js';
 import { SettingsModal } from './components/SettingsModal.js';
+import { TerminalDrawer } from './components/TerminalDrawer.js';
 import { Tooltip } from './components/Tooltip.js';
+import { Button } from './components/ui/Button.js';
 import { Modal } from './components/ui/Modal.js';
 import { VersionIndicator } from './components/VersionIndicator.js';
 import { ZoomControls } from './components/ZoomControls.js';
+import { OFFICE_CANVAS_TEST_ID } from './constants.js';
+import { useDirectoryEditor } from './hooks/useDirectoryEditor.js';
 import { useEditorActions } from './hooks/useEditorActions.js';
 import { useEditorKeyboard } from './hooks/useEditorKeyboard.js';
+import type { Directory } from './hooks/useExtensionMessages.js';
 import { useExtensionMessages } from './hooks/useExtensionMessages.js';
+import { useIntroTour } from './hooks/useIntroTour.js';
+import { useIsMobile } from './hooks/useIsMobile.js';
+import { useKeyboardViewport } from './hooks/useKeyboardViewport.js';
+import { useTerminalDrawer } from './hooks/useTerminalDrawer.js';
+import { MobileShell } from './mobile/MobileShell.js';
+import { useMobileShell } from './mobile/useMobileShell.js';
 import { OfficeCanvas } from './office/components/OfficeCanvas.js';
 import { ToolOverlay } from './office/components/ToolOverlay.js';
 import { EditorState } from './office/editor/editorState.js';
 import { EditorToolbar } from './office/editor/EditorToolbar.js';
 import { OfficeState } from './office/engine/officeState.js';
+import { exportLayoutToFile } from './office/layout/exportLayout.js';
 import { isRotatable } from './office/layout/furnitureCatalog.js';
-import { EditTool } from './office/types.js';
-import { type ProviderId, resolveSelectedProvider } from './providers/providerUi.js';
-import { isBrowserRuntime } from './runtime.js';
-import { vscode } from './vscodeApi.js';
+import { migrateLayoutColors } from './office/layout/layoutSerializer.js';
+import { overlayProjection } from './office/projection.js';
+import { getPetCount } from './office/sprites/petSpriteData.js';
+import { EditTool, type OfficeLayout, TILE_SIZE } from './office/types.js';
+import { isBrowserRuntime, isE2E } from './runtime.js';
+import { installTestHooks } from './testHooks.js';
+import { transport } from './transport/index.js';
 
 // Game state lives outside React — updated imperatively by message handlers
 const officeStateRef = { current: null as OfficeState | null };
 const editorState = new EditorState();
+
+// Test-only observability hooks (message/sound logs, addAgent wrapper, selectAgent).
+// Installed only under the e2e harness so they never patch prototypes or grow
+// unbounded logs in a real user's session.
+if (isE2E) installTestHooks(officeStateRef);
 
 function getOfficeState(): OfficeState {
   if (!officeStateRef.current) {
@@ -37,10 +62,14 @@ function getOfficeState(): OfficeState {
 }
 
 function App() {
+  const [isMd2Layout, setIsMd2Layout] = useState(false);
   // Browser runtime (dev or static dist): dispatch mock messages after the
   // useExtensionMessages listener has been registered.
   useEffect(() => {
-    if (isBrowserRuntime) {
+    // browserMock is for Vite dev mode only (UI prototyping without a server).
+    // In standalone server mode, the server sends all state over WebSocket.
+    // In VS Code mode, the extension sends all state via postMessage.
+    if (isBrowserRuntime && import.meta.env.DEV) {
       void import('./browserMock.js').then(({ dispatchMockMessages }) => dispatchMockMessages());
     }
   }, []);
@@ -57,23 +86,44 @@ function App() {
     selectedAgent,
     agentTools,
     agentStatuses,
+    agentAwaitingInput,
+    agentSeenActivity,
     subagentTools,
     subagentCharacters,
     layoutReady,
     layoutWasReset,
     loadedAssets,
-    workspaceFolders,
+    directories,
+    directoryRejection,
+    directorySaved,
+    directorySuggestions,
+    agentDirectoryNames,
     externalAssetDirectories,
-    enabledProviders,
-    defaultProvider,
     lastSeenVersion,
     extensionVersion,
     watchAllSessions,
     setWatchAllSessions,
     alwaysShowLabels,
+    ghostHeadlessAgents,
+    setGhostHeadlessAgents,
     hooksEnabled,
-    setHooksEnabled,
+    hooksInstalled,
+    hooksStatusSeq,
     hooksInfoShown,
+    consentRequest,
+    dismissConsentRequest,
+    areaMappings,
+    setAreaMappings,
+    showAreas,
+    setShowAreas,
+    bypassPermissions,
+    setBypassPermissions,
+    showHostDirectories,
+    setShowHostDirectories,
+    officeReadOnly,
+    terminalAvailable,
+    terminalUnavailableReason,
+    terminalAgentIds,
   } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty);
 
   // Show migration notice once layout reset is detected
@@ -86,17 +136,55 @@ function App() {
   const [hooksTooltipDismissed, setHooksTooltipDismissed] = useState(false);
   const [isDebugMode, setIsDebugMode] = useState(false);
   const [alwaysShowOverlay, setAlwaysShowOverlay] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<ProviderId>('claude');
+
+  // Mobile shell (phones, touch tablets): office and terminal as sliding
+  // full-screen pages with the cards in a bottom bar. Desktop keeps the
+  // right-docked drawer.
+  const isMobile = useIsMobile();
+  // Software keyboard: whether it is up (the key bar shows), and the height
+  // to clamp the shell to so the terminal shrinks (and the PTY resizes)
+  // instead of hiding its input line under the keys (iOS only — Android
+  // resizes the layout viewport itself).
+  const keyboard = useKeyboardViewport(isMobile);
+  // The office's imperative character selection, mirrored into React so the
+  // card bars can restyle the focused agent's card on canvas taps.
+  const focusedAgentId = useSyncExternalStore(
+    useCallback((onChange: () => void) => getOfficeState().subscribeSelection(onChange), []),
+    () => getOfficeState().selectedAgentId,
+  );
+
+  // Standalone only: every input here stays false/empty under VS Code. Owns the
+  // active tab on both shells; the desktop-only bits (isOpen, width, resize)
+  // are simply unread on mobile, where the sliding track plays the drawer.
+  const terminalDrawer = useTerminalDrawer({
+    terminalAgentIds,
+    getOfficeState,
+    agentTools,
+    agentStatuses,
+    agentAwaitingInput,
+    agentSeenActivity,
+  });
+
+  const launchIntoDirectory = useCallback((directory: Directory) => {
+    transport.send({ type: 'launchAgent', directoryPath: directory.path });
+  }, []);
+  const mobileShell = useMobileShell({
+    getOfficeState,
+    terminalAgentIds,
+    drawer: terminalDrawer,
+    focusedAgentId,
+    launchAgent: launchIntoDirectory,
+  });
 
   const currentMajorMinor = toMajorMinor(extensionVersion);
 
   const handleWhatsNewDismiss = useCallback(() => {
-    vscode.postMessage({ type: 'setLastSeenVersion', version: currentMajorMinor });
+    transport.send({ type: 'setLastSeenVersion', version: currentMajorMinor });
   }, [currentMajorMinor]);
 
   const handleOpenChangelog = useCallback(() => {
     setIsChangelogOpen(true);
-    vscode.postMessage({ type: 'setLastSeenVersion', version: currentMajorMinor });
+    transport.send({ type: 'setLastSeenVersion', version: currentMajorMinor });
   }, [currentMajorMinor]);
 
   // Sync alwaysShowOverlay from persisted settings
@@ -104,40 +192,139 @@ function App() {
     setAlwaysShowOverlay(alwaysShowLabels);
   }, [alwaysShowLabels]);
 
-  useEffect(() => {
-    setSelectedProvider((prev) => resolveSelectedProvider(enabledProviders, prev, defaultProvider));
-  }, [enabledProviders, defaultProvider]);
+  const directoryEditor = useDirectoryEditor({
+    directories,
+    directoryRejection,
+    directorySaved,
+    areaMappings,
+    setAreaMappings,
+    getOfficeState,
+  });
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), []);
   const handleToggleAlwaysShowOverlay = useCallback(() => {
     setAlwaysShowOverlay((prev) => {
       const newVal = !prev;
-      vscode.postMessage({ type: 'setAlwaysShowLabels', enabled: newVal });
+      transport.send({ type: 'setAlwaysShowLabels', enabled: newVal });
       return newVal;
     });
   }, []);
 
-  const handleSelectProvider = useCallback((providerId: ProviderId) => {
-    setSelectedProvider(providerId);
-    vscode.postMessage({ type: 'setDefaultProvider', providerId });
-  }, []);
-
-  const handleToggleProvider = useCallback(
-    (providerId: ProviderId) => {
-      const nextEnabledProviders = enabledProviders.includes(providerId)
-        ? enabledProviders.filter((id) => id !== providerId)
-        : [...enabledProviders, providerId];
-      vscode.postMessage({
-        type: 'setEnabledProviders',
-        enabledProviders: nextEnabledProviders,
-      });
-    },
-    [enabledProviders],
-  );
+  // Toggle "Display headless as ghosts". setGhostHeadlessAgents also updates the
+  // renderer's module copy, so the office redraws on the next frame.
+  const handleToggleGhostHeadlessAgents = useCallback(() => {
+    const next = !ghostHeadlessAgents;
+    setGhostHeadlessAgents(next);
+    transport.send({ type: 'setGhostHeadlessAgents', enabled: next });
+  }, [ghostHeadlessAgents, setGhostHeadlessAgents]);
 
   const handleSelectAgent = useCallback((id: number) => {
-    vscode.postMessage({ type: 'focusAgent', id });
+    transport.send({ type: 'focusAgent', id });
   }, []);
+
+  // The Intro's wire-facing state machine — which asks survive being mooted,
+  // when a hooksStatus is this tour's install verdict — lives in useIntroTour
+  // (pure reducer in introTourState.ts); the App only wires it to the bubble.
+  const {
+    intro,
+    installFailed,
+    installPending,
+    onChoice: handleConsentChoice,
+    onClose: handleIntroClose,
+  } = useIntroTour({ consentRequest, hooksInstalled, hooksStatusSeq, dismissConsentRequest });
+
+  // The Settings surface renders one provider today; its checkbox binds to
+  // the Claude row of the per-provider install-state map.
+  const claudeHooksInstalled = hooksInstalled['claude'] === true;
+
+  // Mutate Directory→Area mappings locally + send to server. Updates OfficeState in
+  // the same tick so a follow-up agentCreated picks up the new mapping.
+  const handleAreaMappingChange = useCallback(
+    (directoryName: string, areaLabel: string, action: 'add' | 'remove') => {
+      const current = areaMappings[directoryName] ?? [];
+      let nextLabels: string[];
+      if (action === 'add') {
+        if (current.includes(areaLabel)) return;
+        nextLabels = [...current, areaLabel];
+      } else {
+        nextLabels = current.filter((l) => l !== areaLabel);
+      }
+      const next = { ...areaMappings };
+      if (nextLabels.length === 0) {
+        delete next[directoryName];
+      } else {
+        next[directoryName] = nextLabels;
+      }
+      setAreaMappings(next);
+      getOfficeState().setAreaMappings(next);
+      transport.send({ type: 'saveAreaMappings', mappings: next });
+    },
+    [areaMappings, setAreaMappings],
+  );
+
+  // Toggle global Show Areas — persisted via setShowAreas message; runs server-
+  // side through configPersistence.
+  const onToggleShowAreas = useCallback(() => {
+    const next = !showAreas;
+    setShowAreas(next);
+    transport.send({ type: 'setShowAreas', enabled: next });
+  }, [showAreas, setShowAreas]);
+
+  // When AREA_PAINT is active in the editor, force the overlay on even if the
+  // user has toggled Show Areas off globally — they need to see what they're
+  // editing. The selected area's overlay is alpha-bumped via activeAreaLabel.
+  const isEditingAreas = editor.isEditMode && editorState.activeTool === EditTool.AREA_PAINT;
+  useEffect(() => {
+    const prepare = () => {
+      setIsMd2Layout(true);
+      editor.handleZoomChange(1);
+      editor.panRef.current = { x: 0, y: 0 };
+      setShowAreas(true);
+    };
+    window.addEventListener('md2-dashboard-ready', prepare);
+    return () => window.removeEventListener('md2-dashboard-ready', prepare);
+  }, [editor.handleZoomChange, editor.panRef, setShowAreas]);
+
+  const effectiveShowAreas = isEditingAreas || showAreas;
+  const activeAreaLabel = isEditingAreas ? editor.selectedAreaLabel : null;
+
+  // e2e: register the component-scoped editor-action drivers + the effective
+  // show-areas gate on the test-hooks namespace (module-load installTestHooks
+  // can't reach these React callbacks). The action drivers bypass canvas
+  // pixel→tile geometry — the handlers still own undo/dirty/rebuild; for specs
+  // that drive the real canvas gesture instead, getTileCenter projects a tile
+  // to canvas CSS pixels with the renderer's own zoom + pan. Guarded on isE2E.
+  useEffect(() => {
+    if (!isE2E || typeof window === 'undefined') return;
+    const hooks = (window.__pixelAgentsTestHooks ??= {});
+    hooks.editorTileAction = (col, row) => editor.handleEditorTileAction(col, row);
+    hooks.editorEraseAction = (col, row) => editor.handleEditorEraseAction(col, row);
+    hooks.editorDrop = (uid, col, row, duplicate = false) =>
+      editor.handleDrop(uid, col, row, { duplicate });
+    hooks.getTileCenter = (col, row) => {
+      const canvas = document.querySelector(`[data-testid="${OFFICE_CANVAS_TEST_ID}"]`);
+      if (!canvas) return null;
+      const projection = overlayProjection(
+        getOfficeState().getLayout(),
+        canvas.getBoundingClientRect(),
+        editor.zoom,
+        editor.panRef.current,
+        window.devicePixelRatio || 1,
+      );
+      return {
+        x: projection.toScreenX((col + 0.5) * TILE_SIZE),
+        y: projection.toScreenY((row + 0.5) * TILE_SIZE),
+      };
+    };
+    hooks.getShowAreas = () => effectiveShowAreas;
+  }, [
+    editor.handleEditorTileAction,
+    editor.handleEditorEraseAction,
+    editor.handleDrop,
+    editor.zoom,
+    editor.panRef,
+    effectiveShowAreas,
+  ]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -155,18 +342,113 @@ function App() {
   );
 
   const handleCloseAgent = useCallback((id: number) => {
-    vscode.postMessage({ type: 'closeAgent', id });
+    transport.send({ type: 'closeAgent', id });
   }, []);
 
-  const handleClick = useCallback((agentId: number) => {
-    // If clicked agent is a sub-agent, focus the parent's terminal instead
-    const os = getOfficeState();
-    const meta = os.subagentMeta.get(agentId);
-    const focusId = meta ? meta.parentAgentId : agentId;
-    vscode.postMessage({ type: 'focusAgent', id: focusId });
+  const { reveal: revealTerminal } = terminalDrawer;
+  const { showTerminal: showMobileTerminal } = mobileShell;
+  const handleClick = useCallback(
+    (agentId: number) => {
+      // If clicked agent is a sub-agent, focus the parent's terminal instead
+      const os = getOfficeState();
+      const focusId = os.terminalOwnerOf(agentId);
+      transport.send({ type: 'focusAgent', id: focusId });
+      // Standalone: focusAgent is a no-op server-side (there's no editor to
+      // raise a panel in), so focus is resolved here — reveal the agent's tab
+      // (desktop drawer) and slide to the terminal page (mobile). A Teammate
+      // without a terminal of its own runs in its Lead's, so it reveals that
+      // one (VS Code resolves the same way server-side).
+      const leadId = os.characters.get(focusId)?.leadAgentId;
+      const terminalId =
+        leadId !== undefined && !terminalAgentIds.includes(focusId) ? leadId : focusId;
+      if (terminalAgentIds.includes(terminalId)) {
+        revealTerminal(terminalId);
+        if (isMobile) showMobileTerminal();
+      }
+    },
+    [terminalAgentIds, isMobile, revealTerminal, showMobileTerminal],
+  );
+
+  // Card click when there is no terminal pane to switch (VS Code, or a
+  // watch-only standalone session): ask the host to raise the agent's own
+  // terminal — VS Code shows the editor terminal, standalone has nothing to
+  // show — and select its character so the office follows the click.
+  const handleCardSelect = useCallback((agentId: number) => {
+    transport.send({ type: 'focusAgent', id: agentId });
+    getOfficeState().selectAndFollow(agentId);
   }, []);
 
   const officeState = getOfficeState();
+
+  // Merged set of Directories the Areas dropdown can map: host-contributed ones plus
+  // every distinct Directory an agent has run in this session (deduped by name; name
+  // is the areaMappings key / seat-bias identity, path is only the React list key).
+  const areaDirectories = useMemo(() => {
+    const byName = new Map<string, { name: string; path: string }>();
+    for (const f of directories) byName.set(f.name, f);
+    for (const name of agentDirectoryNames) {
+      if (!byName.has(name)) byName.set(name, { name, path: name });
+    }
+    return [...byName.values()];
+  }, [directories, agentDirectoryNames]);
+
+  // The Areas the office defines, offered as a multi-select in the Directory
+  // modal. Read straight off the layout (imperative state) on each render, so a
+  // layout that loaded — or an Area just added in the editor — is in the list
+  // the next time the modal opens.
+  const areaLabels = (officeState.getLayout().areas ?? []).map((area) => area.label);
+
+  // Areas authoring is available when the layout already defines areas, or when
+  // there is at least one mappable Directory. Decouples the Areas UI from VS Code
+  // multi-root workspaces (fixes single-root VS Code AND standalone, where
+  // directories is always empty).
+  const areasAvailable =
+    (officeState.getLayout().areas?.length ?? 0) > 0 || areaDirectories.length > 0;
+
+  const handleExportLayout = useCallback(() => {
+    exportLayoutToFile(getOfficeState().getLayout());
+  }, []);
+
+  const handleImportLayout = useCallback(
+    (file: File) => {
+      // Browser-native import (standalone): read + validate + apply directly,
+      // bypassing the layoutLoaded message whose dirty guard would skip it.
+      if (
+        isEditDirty() &&
+        !window.confirm('Replace the current layout? Unsaved edits will be lost.')
+      ) {
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const imported = JSON.parse(String(reader.result)) as Record<string, unknown>;
+          // Match the VS Code guard, plus the furniture-array check VS Code omits
+          // (migrate + rebuild iterate furniture and would throw on a non-array).
+          if (
+            imported.version !== 1 ||
+            !Array.isArray(imported.tiles) ||
+            !Array.isArray(imported.furniture)
+          ) {
+            window.alert('Invalid layout file.');
+            return;
+          }
+          const migrated = migrateLayoutColors(imported as unknown as OfficeLayout);
+          getOfficeState().rebuildFromLayout(migrated);
+          editor.setLastSavedLayout(migrated);
+          transport.send({
+            type: 'saveLayout',
+            layout: migrated as unknown as Record<string, unknown>,
+          });
+          editor.markClean();
+        } catch {
+          window.alert('Failed to read or parse layout file.');
+        }
+      };
+      reader.readAsText(file);
+    },
+    [isEditDirty, editor],
+  );
 
   // Force dependency on editorTickForKeyboard to propagate keyboard-triggered re-renders
   void editorTickForKeyboard;
@@ -183,7 +465,7 @@ function App() {
       }
       if (
         editorState.activeTool === EditTool.FURNITURE_PLACE &&
-        isRotatable(editorState.selectedFurnitureType)
+        isRotatable(editorState.placingType)
       ) {
         return true;
       }
@@ -194,8 +476,15 @@ function App() {
     return <div className="w-full h-full flex items-center justify-center ">Loading...</div>;
   }
 
-  return (
-    <div ref={containerRef} className="w-full h-full relative overflow-hidden">
+  // The office region is shared by both shells: desktop mounts it as the
+  // flexing left half of the split view (the terminal panel docks beside it);
+  // mobile mounts it as the first page of the sliding track. containerRef
+  // (ToolOverlay geometry) rides along either way.
+  const officeRegion = (
+    <div
+      ref={containerRef}
+      className={`md2-office-region relative h-full overflow-hidden ${isMobile ? 'w-full' : 'flex-1 min-w-0'}`}
+    >
       <OfficeCanvas
         officeState={officeState}
         onClick={handleClick}
@@ -206,16 +495,21 @@ function App() {
         onEditorSelectionChange={editor.handleEditorSelectionChange}
         onDeleteSelected={editor.handleDeleteSelected}
         onRotateSelected={editor.handleRotateSelected}
-        onDragMove={editor.handleDragMove}
+        onDrop={editor.handleDrop}
         editorTick={editor.editorTick}
         zoom={editor.zoom}
         onZoomChange={editor.handleZoomChange}
         panRef={editor.panRef}
+        showAreas={effectiveShowAreas || isMd2Layout}
+        activeAreaLabel={activeAreaLabel}
+        tapSelectsFirst={isMobile}
       />
 
       {!isDebugMode ? (
         <>
-          <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />
+          {/* Mobile: pinch replaces the zoom buttons, and the toolbar's
+                jobs move to the card bar (+) and the floating Settings button. */}
+          {!isMobile && <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />}
 
           {/* Vignette overlay */}
           <div
@@ -246,7 +540,7 @@ function App() {
                 <EditorToolbar
                   activeTool={editorState.activeTool}
                   selectedTileType={editorState.selectedTileType}
-                  selectedFurnitureType={editorState.selectedFurnitureType}
+                  selectedFurnitureType={editorState.placingType}
                   selectedFurnitureUid={selUid}
                   selectedFurnitureColor={selColor}
                   floorColor={editorState.floorColor}
@@ -258,8 +552,31 @@ function App() {
                   onWallColorChange={editor.handleWallColorChange}
                   onWallSetChange={editor.handleWallSetChange}
                   onSelectedFurnitureColorChange={editor.handleSelectedFurnitureColorChange}
+                  pickedFurnitureColor={editorState.pickedFurnitureColor}
+                  onPickedFurnitureColorChange={editor.handlePickedFurnitureColorChange}
+                  onColorPickToggle={editor.handleColorPickToggle}
                   onFurnitureTypeChange={editor.handleFurnitureTypeChange}
                   loadedAssets={loadedAssets}
+                  activePetTypes={officeState.getActivePetTypes()}
+                  petCount={getPetCount()}
+                  onPetToggle={editor.handlePetToggle}
+                  carpetVariant={editor.carpetVariant}
+                  carpetColor={editor.carpetColor}
+                  carpetAccentColor={editor.carpetAccentColor}
+                  onCarpetVariantChange={editor.handleCarpetVariantChange}
+                  onCarpetColorChange={editor.handleCarpetColorChange}
+                  onCarpetAccentColorChange={editor.handleCarpetAccentColorChange}
+                  areas={officeState.getLayout().areas ?? []}
+                  selectedAreaLabel={editor.selectedAreaLabel}
+                  directories={areaDirectories}
+                  areasAvailable={areasAvailable}
+                  areaMappings={areaMappings}
+                  onSelectArea={editor.handleSelectArea}
+                  onAddArea={editor.handleAddArea}
+                  onRemoveArea={editor.handleRemoveArea}
+                  onRenameArea={editor.handleRenameArea}
+                  onAreaColorChange={editor.handleAreaColorChange}
+                  onAreaMappingChange={handleAreaMappingChange}
                 />
               );
             })()}
@@ -268,6 +585,7 @@ function App() {
             officeState={officeState}
             agents={agents}
             agentTools={agentTools}
+            subagentTools={subagentTools}
             subagentCharacters={subagentCharacters}
             containerRef={containerRef}
             zoom={editor.zoom}
@@ -283,18 +601,22 @@ function App() {
           agentTools={agentTools}
           agentStatuses={agentStatuses}
           subagentTools={subagentTools}
+          officeState={officeState}
           onSelectAgent={handleSelectAgent}
         />
       )}
 
-      {/* Hooks first-run tooltip */}
-      {!hooksInfoShown && !hooksTooltipDismissed && (
+      {/* Hooks first-run tooltip. Gated on hooksInstalled (the hooksStatus
+          message), NOT the hooksEnabled preference: hooksEnabled defaults true
+          while first-run consent is still pending, and announcing "Instant
+          Detection Active" before anything is installed would be a lie. */}
+      {hooksEnabled && claudeHooksInstalled && !hooksInfoShown && !hooksTooltipDismissed && (
         <Tooltip
           title="Instant Detection Active"
           position="top-right"
           onDismiss={() => {
             setHooksTooltipDismissed(true);
-            vscode.postMessage({ type: 'setHooksInfoShown' });
+            transport.send({ type: 'setHooksInfoShown' });
           }}
         >
           <span className="text-sm text-text leading-none">
@@ -304,7 +626,7 @@ function App() {
               onClick={() => {
                 setIsHooksInfoOpen(true);
                 setHooksTooltipDismissed(true);
-                vscode.postMessage({ type: 'setHooksInfoShown' });
+                transport.send({ type: 'setHooksInfoShown' });
               }}
             >
               View more
@@ -313,7 +635,150 @@ function App() {
         </Tooltip>
       )}
 
-      {/* Hooks info modal */}
+      {officeReadOnly && (
+        <div className="absolute mobile-safe-top left-1/2 -translate-x-1/2 z-10 text-sm text-text-muted pointer-events-none select-none whitespace-nowrap">
+          View only
+        </div>
+      )}
+
+      {/* A read-only office gets no toolbar: launching, layout editing and every
+          setting would be refused by the server anyway. */}
+      {!isMobile && !officeReadOnly && (
+        <BottomToolbar
+          isEditMode={editor.isEditMode}
+          onToggleEditMode={editor.handleToggleEditMode}
+          isSettingsOpen={isSettingsOpen}
+          onToggleSettings={() => setIsSettingsOpen((v) => !v)}
+          directories={directories}
+          onAddDirectory={directoryEditor.add}
+          onEditDirectory={directoryEditor.edit}
+          terminalAvailable={terminalAvailable}
+          terminalUnavailableReason={terminalUnavailableReason}
+        />
+      )}
+
+      {/* Mobile: Settings floats top-left (the layout editor stays desktop-
+            only — its tools are drag/hover-driven). */}
+      {isMobile && !isDebugMode && !officeReadOnly && (
+        <div className="absolute mobile-safe-top left-8 z-20">
+          <Button
+            size="sm"
+            variant={isSettingsOpen ? 'active' : 'default'}
+            className="border-border! shadow-pixel"
+            onClick={() => setIsSettingsOpen((v) => !v)}
+          >
+            Settings
+          </Button>
+        </div>
+      )}
+
+      <VersionIndicator
+        currentVersion={extensionVersion}
+        lastSeenVersion={lastSeenVersion}
+        hideUpdateNotice={officeReadOnly}
+        onDismiss={handleWhatsNewDismiss}
+        onOpenChangelog={handleOpenChangelog}
+      />
+
+      {intro && !isMd2Layout && (
+        <IntroBubble
+          officeState={officeState}
+          headline={intro.headline}
+          disclosure={intro.disclosure}
+          containerRef={containerRef}
+          zoom={editor.zoom}
+          panRef={editor.panRef}
+          installFailed={installFailed}
+          installPending={installPending}
+          onChoice={handleConsentChoice}
+          onClose={handleIntroClose}
+          escapeSuppressed={
+            isSettingsOpen ||
+            isChangelogOpen ||
+            isHooksInfoOpen ||
+            showMigrationNotice ||
+            editor.isEditMode
+          }
+        />
+      )}
+
+      <ConnectionIndicator />
+    </div>
+  );
+
+  return (
+    // Desktop: split view — the office region flexes to fill the space left of
+    // the terminal panel. Mobile: a column — the sliding office/terminal track
+    // on top, the agent-card bar pinned along the bottom.
+    <div
+      className={`w-full h-full relative overflow-hidden flex ${isMobile ? 'flex-col' : ''}`}
+      style={
+        isMobile && keyboard.clampHeight !== null ? { height: keyboard.clampHeight } : undefined
+      }
+    >
+      {isBrowserRuntime && !import.meta.env.DEV && <Md2OfficePanel />}
+      {isMobile ? (
+        <MobileShell
+          office={officeRegion}
+          shell={mobileShell}
+          drawer={terminalDrawer}
+          agentIds={agents}
+          terminalAgentIds={terminalAgentIds}
+          focusedAgentId={focusedAgentId}
+          terminalAvailable={terminalAvailable}
+          terminalUnavailableReason={terminalUnavailableReason}
+          directories={directories}
+          onAddDirectory={directoryEditor.add}
+          onEditDirectory={directoryEditor.edit}
+          onCloseAgent={handleCloseAgent}
+          keyboardOpen={keyboard.keyboardOpen}
+        />
+      ) : (
+        <>
+          {officeRegion}
+
+          {/* Standalone with a terminal: terminalAvailable is only ever true when
+              the server reports a working PTY to a tokened session, which VS
+              Code's surface never does. In flow as a flex sibling so the office
+              region reflows beside it instead of being overlaid.
+
+              Otherwise (VS Code, or a watch-only standalone session) the card
+              bar stands alone with every agent in the office, external sessions
+              included — the at-a-glance "who needs attention" strip, with a
+              click raising the agent's editor terminal where there is one. */}
+          {terminalAvailable ? (
+            <TerminalDrawer
+              agentIds={terminalAgentIds}
+              shownAgentId={terminalDrawer.shownAgentId}
+              onSelectAgent={terminalDrawer.select}
+              onCloseAgent={handleCloseAgent}
+              isOpen={terminalDrawer.isOpen}
+              onClosePanel={terminalDrawer.close}
+              widthPx={terminalDrawer.widthPx}
+              onResizeStart={terminalDrawer.onResizeStart}
+              getAppearance={terminalDrawer.getAppearance}
+              statusFor={terminalDrawer.statusFor}
+              onStatusChange={terminalDrawer.onStatusChange}
+            />
+          ) : (
+            !isDebugMode && (
+              <AgentCardBar
+                agentIds={agents}
+                focusedAgentId={focusedAgentId}
+                getAppearance={terminalDrawer.getAppearance}
+                statusFor={terminalDrawer.statusFor}
+                onSelect={handleCardSelect}
+                onClose={handleCloseAgent}
+              />
+            )
+          )}
+        </>
+      )}
+
+      {/* Hooks info modal. Top level, beside the other modals: inside the
+          office region it would sit in the mobile shell's transformed track,
+          and a transformed ancestor is the containing block of position:
+          fixed — the modal would size to the 200%-wide track. */}
       <Modal
         isOpen={isHooksInfoOpen}
         onClose={() => setIsHooksInfoOpen(false)}
@@ -344,23 +809,19 @@ function App() {
           </p>
         </div>
       </Modal>
-
-      <BottomToolbar
-        isEditMode={editor.isEditMode}
-        onToggleEditMode={editor.handleToggleEditMode}
-        isSettingsOpen={isSettingsOpen}
-        onToggleSettings={() => setIsSettingsOpen((v) => !v)}
-        workspaceFolders={workspaceFolders}
-        enabledProviders={enabledProviders}
-        selectedProvider={selectedProvider}
-        onSelectProvider={handleSelectProvider}
-      />
-
-      <VersionIndicator
-        currentVersion={extensionVersion}
-        lastSeenVersion={lastSeenVersion}
-        onDismiss={handleWhatsNewDismiss}
-        onOpenChangelog={handleOpenChangelog}
+      {/* Rendered at the composition root, not inside a launch surface: the
+          drawer that opens it lives in BottomToolbar on desktop and
+          MobileAgentBar on mobile, and both close as soon as it appears. */}
+      <DirectoryModal
+        isOpen={directoryEditor.modal.open}
+        editing={directoryEditor.modal.editing}
+        error={directoryEditor.error}
+        suggestions={directorySuggestions}
+        areas={areaLabels}
+        assignedAreas={directoryEditor.assignedAreas}
+        onSubmit={directoryEditor.submit}
+        onDelete={directoryEditor.remove}
+        onClose={directoryEditor.close}
       />
 
       <ChangelogModal
@@ -376,22 +837,49 @@ function App() {
         onToggleDebugMode={handleToggleDebugMode}
         alwaysShowOverlay={alwaysShowOverlay}
         onToggleAlwaysShowOverlay={handleToggleAlwaysShowOverlay}
+        ghostHeadlessAgents={ghostHeadlessAgents}
+        onToggleGhostHeadlessAgents={handleToggleGhostHeadlessAgents}
         externalAssetDirectories={externalAssetDirectories}
-        enabledProviders={enabledProviders}
-        selectedProvider={selectedProvider}
-        onToggleProvider={handleToggleProvider}
         watchAllSessions={watchAllSessions}
         onToggleWatchAllSessions={() => {
           const newVal = !watchAllSessions;
           setWatchAllSessions(newVal);
-          vscode.postMessage({ type: 'setWatchAllSessions', enabled: newVal });
+          transport.send({ type: 'setWatchAllSessions', enabled: newVal });
         }}
-        hooksEnabled={hooksEnabled}
+        hooksInstalled={claudeHooksInstalled}
         onToggleHooksEnabled={() => {
-          const newVal = !hooksEnabled;
-          setHooksEnabled(newVal);
-          vscode.postMessage({ type: 'setHooksEnabled', enabled: newVal });
+          // Toggle the DISPLAYED state (actual install), not the preference: when the two disagree — preference on,
+          // nothing installed while consent is pending — toggling the preference would turn hooks OFF for a user
+          // asking for ON. No optimistic local update either; both backends answer with the truthful hooksStatus this
+          // checkbox renders, so it lands correct instead of flickering when an install fails. The providerId is
+          // ECHOED from that row (never originated here), so nothing sends until the row has arrived.
+          const [rowProviderId] =
+            Object.entries(hooksInstalled).find(([id]) => id === 'claude') ?? [];
+          if (rowProviderId !== undefined) {
+            transport.send({
+              type: 'setHooksEnabled',
+              providerId: rowProviderId,
+              enabled: !claudeHooksInstalled,
+            });
+          }
         }}
+        showAreas={showAreas}
+        onToggleShowAreas={onToggleShowAreas}
+        showAreasAvailable={areasAvailable}
+        bypassPermissions={bypassPermissions}
+        onToggleBypassPermissions={() => {
+          const newVal = !bypassPermissions;
+          setBypassPermissions(newVal);
+          transport.send({ type: 'setBypassPermissions', enabled: newVal });
+        }}
+        showHostDirectories={showHostDirectories}
+        onToggleShowHostDirectories={() => {
+          const newVal = !showHostDirectories;
+          setShowHostDirectories(newVal);
+          transport.send({ type: 'setShowHostDirectories', enabled: newVal });
+        }}
+        onExportLayout={handleExportLayout}
+        onImportLayout={handleImportLayout}
       />
 
       {showMigrationNotice && (

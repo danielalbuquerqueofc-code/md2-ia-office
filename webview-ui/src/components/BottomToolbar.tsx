@@ -1,24 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 
-import type { WorkspaceFolder } from '../hooks/useExtensionMessages.js';
-import {
-  buildOpenAgentMessage,
-  getEnabledProviderOptions,
-  type ProviderId,
-} from '../providers/providerUi.js';
-import { vscode } from '../vscodeApi.js';
+import type { Directory } from '../hooks/useExtensionMessages.js';
+import { isBrowserRuntime } from '../runtime.js';
+import { transport } from '../transport/index.js';
+import { LaunchDrawer } from './LaunchDrawer.js';
 import { Button } from './ui/Button.js';
-import { Dropdown, DropdownItem } from './ui/Dropdown.js';
 
 interface BottomToolbarProps {
   isEditMode: boolean;
   onToggleEditMode: () => void;
   isSettingsOpen: boolean;
   onToggleSettings: () => void;
-  workspaceFolders: WorkspaceFolder[];
-  enabledProviders: ProviderId[];
-  selectedProvider: ProviderId;
-  onSelectProvider: (providerId: ProviderId) => void;
+  directories: Directory[];
+  /** Drawer's pinned `+ Directory` row — opens the Directory modal empty. */
+  onAddDirectory: () => void;
+  /** Pencil on a user-defined row — opens the modal pre-filled. */
+  onEditDirectory: (directory: Directory) => void;
+  /** Standalone: server has a working PTY, so agents can be launched here. */
+  terminalAvailable: boolean;
+  /** Why the terminal is off (shown on the disabled button's tooltip). */
+  terminalUnavailableReason: string | null;
 }
 
 export function BottomToolbar({
@@ -26,141 +27,90 @@ export function BottomToolbar({
   onToggleEditMode,
   isSettingsOpen,
   onToggleSettings,
-  workspaceFolders,
-  enabledProviders,
-  selectedProvider,
-  onSelectProvider,
+  directories,
+  onAddDirectory,
+  onEditDirectory,
+  terminalAvailable,
+  terminalUnavailableReason,
 }: BottomToolbarProps) {
-  const [isProviderMenuOpen, setIsProviderMenuOpen] = useState(false);
-  const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
-  const [isBypassMenuOpen, setIsBypassMenuOpen] = useState(false);
-  const toolbarRef = useRef<HTMLDivElement>(null);
-  const pendingBypassRef = useRef(false);
-  const providerOptions = getEnabledProviderOptions(enabledProviders);
-  const selectedProviderLabel =
-    providerOptions.find((provider) => provider.id === selectedProvider)?.label ?? 'Provider';
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const launchRef = useRef<HTMLDivElement>(null);
 
+  // Close the launch drawer on outside press (the dropdown convention here).
   useEffect(() => {
-    if (!isProviderMenuOpen && !isFolderPickerOpen && !isBypassMenuOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (toolbarRef.current && !toolbarRef.current.contains(e.target as Node)) {
-        setIsProviderMenuOpen(false);
-        setIsFolderPickerOpen(false);
-        setIsBypassMenuOpen(false);
+    if (!isDrawerOpen) return;
+    const handlePress = (e: PointerEvent) => {
+      if (launchRef.current && !launchRef.current.contains(e.target as Node)) {
+        setIsDrawerOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [isProviderMenuOpen, isFolderPickerOpen, isBypassMenuOpen]);
+    document.addEventListener('pointerdown', handlePress);
+    return () => document.removeEventListener('pointerdown', handlePress);
+  }, [isDrawerOpen]);
 
-  const hasMultipleFolders = workspaceFolders.length > 1;
-
+  // A plain press never launches: it opens the drawer, and the launch happens
+  // from a Directory row. Opening (not toggling) so a click that follows the
+  // hover — which already opened the drawer — doesn't close it.
   const handleAgentClick = () => {
-    setIsProviderMenuOpen(false);
-    setIsBypassMenuOpen(false);
-    pendingBypassRef.current = false;
-    if (hasMultipleFolders) {
-      setIsFolderPickerOpen((open) => !open);
-      return;
-    }
-    vscode.postMessage(buildOpenAgentMessage({ providerId: selectedProvider }));
+    setIsDrawerOpen(true);
   };
 
-  const handleAgentHover = () => {
-    if (!isFolderPickerOpen) {
-      setIsBypassMenuOpen(true);
-    }
+  const handleDirectorySelect = (directory: Directory) => {
+    setIsDrawerOpen(false);
+    transport.send({ type: 'launchAgent', directoryPath: directory.path });
   };
 
-  const handleAgentLeave = () => {
-    if (!isFolderPickerOpen) {
-      setIsBypassMenuOpen(false);
-    }
-  };
-
-  const handleFolderSelect = (folder: WorkspaceFolder) => {
-    setIsFolderPickerOpen(false);
-    const bypassPermissions = pendingBypassRef.current;
-    pendingBypassRef.current = false;
-    vscode.postMessage(
-      buildOpenAgentMessage({
-        providerId: selectedProvider,
-        folderPath: folder.path,
-        bypassPermissions,
-      }),
-    );
-  };
-
-  const handleBypassSelect = (bypassPermissions: boolean) => {
-    setIsBypassMenuOpen(false);
-    if (hasMultipleFolders) {
-      pendingBypassRef.current = bypassPermissions;
-      setIsFolderPickerOpen(true);
-      return;
-    }
-    vscode.postMessage(buildOpenAgentMessage({ providerId: selectedProvider, bypassPermissions }));
-  };
+  // Standalone can launch agents whenever the server has a working PTY. When it
+  // doesn't, show the button disabled with the reason rather than hiding it —
+  // silently missing UI reads as a bug, and the cause (a native module that
+  // couldn't install) is not something a user would otherwise ever discover.
+  const canLaunch = !isBrowserRuntime || terminalAvailable;
+  const showUnavailable = isBrowserRuntime && !terminalAvailable;
 
   return (
-    <div
-      ref={toolbarRef}
-      className="absolute bottom-10 left-10 z-20 flex items-center gap-4 pixel-panel p-4"
-    >
-      <div className="relative">
+    // Bottom-left. The terminal panel docks on the right edge, so it never
+    // reaches these buttons and no lift is needed.
+    <div className="absolute left-10 bottom-10 z-20 flex items-center gap-4 pixel-panel p-4">
+      {showUnavailable && (
         <Button
-          variant={isProviderMenuOpen ? 'active' : 'default'}
-          onClick={() => {
-            setIsProviderMenuOpen((open) => !open);
-            setIsFolderPickerOpen(false);
-            setIsBypassMenuOpen(false);
-          }}
-        >
-          {selectedProviderLabel}
-        </Button>
-        <Dropdown isOpen={isProviderMenuOpen} className="min-w-96">
-          {providerOptions.map((provider) => (
-            <DropdownItem
-              key={provider.id}
-              onClick={() => {
-                onSelectProvider(provider.id);
-                setIsProviderMenuOpen(false);
-              }}
-            >
-              {provider.label}
-              {provider.id === selectedProvider ? ' (Selected)' : ''}
-            </DropdownItem>
-          ))}
-        </Dropdown>
-      </div>
-      <div className="relative" onMouseEnter={handleAgentHover} onMouseLeave={handleAgentLeave}>
-        <Button
-          variant="accent"
-          onClick={handleAgentClick}
-          className={
-            isFolderPickerOpen || isBypassMenuOpen
-              ? 'bg-accent-bright'
-              : 'bg-accent hover:bg-accent-bright'
-          }
+          variant="disabled"
+          disabled
+          title={terminalUnavailableReason ?? 'Terminal unavailable on this server.'}
         >
           + Agent
         </Button>
-        <Dropdown isOpen={isBypassMenuOpen}>
-          <DropdownItem onClick={() => handleBypassSelect(true)}>
-            Skip permissions mode <span className="text-2xs text-warning">!</span>
-          </DropdownItem>
-        </Dropdown>
-        <Dropdown isOpen={isFolderPickerOpen} className="min-w-128">
-          {workspaceFolders.map((folder) => (
-            <DropdownItem
-              key={folder.path}
-              onClick={() => handleFolderSelect(folder)}
-              className="text-base"
-            >
-              {folder.name}
-            </DropdownItem>
-          ))}
-        </Dropdown>
-      </div>
+      )}
+      {canLaunch && (
+        <div
+          ref={launchRef}
+          className="relative"
+          // Hover is the desktop secondary gesture (long-press is the mobile
+          // one): it opens the drawer without committing to a launch.
+          onMouseEnter={() => setIsDrawerOpen(true)}
+          onMouseLeave={() => setIsDrawerOpen(false)}
+        >
+          <Button
+            variant="accent"
+            onClick={handleAgentClick}
+            className={isDrawerOpen ? 'bg-accent-bright' : 'bg-accent hover:bg-accent-bright'}
+          >
+            + Agent
+          </Button>
+          <LaunchDrawer
+            isOpen={isDrawerOpen}
+            directories={directories}
+            onSelect={handleDirectorySelect}
+            onAddDirectory={() => {
+              setIsDrawerOpen(false);
+              onAddDirectory();
+            }}
+            onEditDirectory={(directory) => {
+              setIsDrawerOpen(false);
+              onEditDirectory(directory);
+            }}
+          />
+        </div>
+      )}
       <Button
         variant={isEditMode ? 'active' : 'default'}
         onClick={onToggleEditMode}
