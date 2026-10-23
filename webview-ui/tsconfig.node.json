@@ -2,13 +2,14 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM"],
     "module": "ESNext",
     "baseUrl": ".",
     "paths": {
       "pngjs": ["./node_modules/@types/pngjs/index.d.ts"]
     },
-    "types": ["node"],
+    "types": ["node", "vite/client"],
+    "jsx": "react-jsx",
     "skipLibCheck": true,
 
     /* Bundler mode */

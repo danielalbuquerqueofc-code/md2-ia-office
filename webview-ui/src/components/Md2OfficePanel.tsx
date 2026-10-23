@@ -2,10 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { serverToken } from '../transport/serverToken.js';
 import { Md2Dashboard } from './Md2Dashboard.js';
+import { Md2IsometricOffice } from './Md2IsometricOffice.js';
 import { Button } from './ui/Button.js';
 
 type Task = {
   id: string;
+  agentId?: number;
+  threadId?: string;
   prompt: string;
   status: string;
   output: string;
@@ -106,6 +109,7 @@ export function Md2OfficePanel() {
   if (!enabled) return null;
   return (
     <>
+      <Md2IsometricOffice tasks={snapshot?.tasks ?? []} onOpen={() => setOpen(true)} />
       <Md2Dashboard
         tasks={snapshot?.tasks ?? []}
         busy={snapshot?.busy ?? false}
