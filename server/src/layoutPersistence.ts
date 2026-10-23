@@ -15,6 +15,8 @@ export interface LayoutWatcher {
 }
 
 function getLayoutFilePath(): string {
+  if (process.env['MD2_OFFICE_ENABLED'] === '1')
+    return path.join(process.cwd(), '.md2-office', 'layout.json');
   return path.join(os.homedir(), LAYOUT_FILE_DIR, LAYOUT_FILE_NAME);
 }
 

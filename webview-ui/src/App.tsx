@@ -62,6 +62,7 @@ function getOfficeState(): OfficeState {
 }
 
 function App() {
+  const [isMd2Layout, setIsMd2Layout] = useState(false);
   // Browser runtime (dev or static dist): dispatch mock messages after the
   // useExtensionMessages listener has been registered.
   useEffect(() => {
@@ -273,6 +274,17 @@ function App() {
   // user has toggled Show Areas off globally — they need to see what they're
   // editing. The selected area's overlay is alpha-bumped via activeAreaLabel.
   const isEditingAreas = editor.isEditMode && editorState.activeTool === EditTool.AREA_PAINT;
+  useEffect(() => {
+    const prepare = () => {
+      setIsMd2Layout(true);
+      editor.handleZoomChange(1);
+      editor.panRef.current = { x: 0, y: 0 };
+      setShowAreas(true);
+    };
+    window.addEventListener('md2-dashboard-ready', prepare);
+    return () => window.removeEventListener('md2-dashboard-ready', prepare);
+  }, [editor.handleZoomChange, editor.panRef, setShowAreas]);
+
   const effectiveShowAreas = isEditingAreas || showAreas;
   const activeAreaLabel = isEditingAreas ? editor.selectedAreaLabel : null;
 
@@ -471,7 +483,7 @@ function App() {
   const officeRegion = (
     <div
       ref={containerRef}
-      className={`relative h-full overflow-hidden ${isMobile ? 'w-full' : 'flex-1 min-w-0'}`}
+      className={`md2-office-region relative h-full overflow-hidden ${isMobile ? 'w-full' : 'flex-1 min-w-0'}`}
     >
       <OfficeCanvas
         officeState={officeState}
@@ -488,7 +500,7 @@ function App() {
         zoom={editor.zoom}
         onZoomChange={editor.handleZoomChange}
         panRef={editor.panRef}
-        showAreas={effectiveShowAreas}
+        showAreas={effectiveShowAreas || isMd2Layout}
         activeAreaLabel={activeAreaLabel}
         tapSelectsFirst={isMobile}
       />
@@ -668,7 +680,7 @@ function App() {
         onOpenChangelog={handleOpenChangelog}
       />
 
-      {intro && (
+      {intro && !isMd2Layout && (
         <IntroBubble
           officeState={officeState}
           headline={intro.headline}

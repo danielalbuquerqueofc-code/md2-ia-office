@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 import fastifyCors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
@@ -112,6 +115,11 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     process.env['MD2_OFFICE_ENABLED'] === '1' &&
     options.ptyManager?.enabled !== false;
   app.get('/api/md2/enabled', async () => ({ enabled: md2Enabled }));
+  if (md2Enabled && options.staticDir && options.assetCache) {
+    const layoutFile = path.join(options.staticDir, '../assets/md2-layout.json');
+    if (existsSync(layoutFile))
+      options.assetCache.defaultLayout = JSON.parse(readFileSync(layoutFile, 'utf8'));
+  }
   if (md2Enabled)
     registerMd2Routes(app, { token: options.token, store: options.store, allowedHostnames });
   registerHealthRoute(app);

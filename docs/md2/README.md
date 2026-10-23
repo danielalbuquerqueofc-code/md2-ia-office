@@ -75,3 +75,7 @@ WhatsApp começa pelo planejamento de conversas individuais, consentimento, webh
 Preservados LICENSE MIT, copyright Pablo De Lucca e créditos dos personagens JIK-A-4 / Metro City do upstream. Manter as condições de cada pacote de assets na redistribuição. Esta adaptação não é uma publicação oficial do Pixel Agents.
 
 Protocolo Codex: https://learn.chatgpt.com/docs/app-server. Os parâmetros de aprovação também foram conferidos no schema gerado pelo Codex instalado nesta máquina.
+
+### Visual de referência e economia
+
+O painel MD2 organiza sete departamentos, CEO e atendimento com os sprites originais do Pixel Agents. As 20 posições são planejamento; abrir o escritório não inicia agentes nem chamadas de IA. O programador só executa uma tarefa enviada pelo usuário. Aprovações sensíveis continuam manuais. O mapa MD2 é salvo separadamente em .md2-office/layout.json, preservando o mapa global original.
