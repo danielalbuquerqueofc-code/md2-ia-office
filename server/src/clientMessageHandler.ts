@@ -562,7 +562,12 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
   // webview seat-preference logic has the dict when characters are created).
   send({
     type: 'areaMappingsLoaded',
-    mappings: cfg.standalone.areaMappings ?? {},
+    mappings: {
+      ...cfg.standalone.areaMappings,
+      ...(process.env['MD2_OFFICE_ENABLED'] === '1'
+        ? { 'Tecnologia · Codex': ['Tecnologia', 'TECNOLOGIA · 4 posições'] }
+        : {}),
+    },
   });
 
   // 4c. Directories: the user-defined ones from the shared config merged with

@@ -66,6 +66,7 @@ export function Md2Dashboard({
         ].map((name, index) => (
           <button
             key={name}
+            aria-label={name}
             className={view === name ? 'selected' : ''}
             onClick={() => select(name)}
           >

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   CAMERA_FOLLOW_LERP,
@@ -24,6 +24,7 @@ import type {
 } from '../engine/renderer.js';
 import { renderFrame } from '../engine/renderer.js';
 import { EditTool, TILE_SIZE } from '../types.js';
+import { fitOfficeZoom } from './md2Viewport.js';
 import { computeNormalModeCursor } from './officeCanvasCursor.js';
 import { useCanvasTouchGestures } from './useCanvasTouchGestures.js';
 
@@ -52,6 +53,9 @@ interface OfficeCanvasProps {
   onDrop: (uid: string, col: number, row: number, opts: { duplicate: boolean }) => void;
   editorTick: number;
   zoom: number;
+  /** MD2 overview only; the original editor keeps its existing zoom behavior. */
+  fitToViewport?: boolean;
+  onRenderZoomChange?: (zoom: number) => void;
   onZoomChange: (zoom: number) => void;
   panRef: React.MutableRefObject<{ x: number; y: number }>;
   /** Whether the area overlay + labels should render (settings toggle OR active edit). */
@@ -77,13 +81,28 @@ export function OfficeCanvas({
   onRotateSelected,
   onDrop,
   editorTick: _editorTick,
-  zoom,
+  zoom: requestedZoom,
+  fitToViewport = false,
+  onRenderZoomChange,
   onZoomChange,
   panRef,
   showAreas,
   activeAreaLabel,
   tapSelectsFirst = false,
 }: OfficeCanvasProps) {
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const layout = officeState.getLayout();
+  const zoom = fitToViewport
+    ? fitOfficeZoom(
+        requestedZoom,
+        viewport.width,
+        viewport.height,
+        layout.cols,
+        layout.rows,
+        TILE_SIZE,
+      )
+    : requestedZoom;
+  useEffect(() => onRenderZoomChange?.(zoom), [onRenderZoomChange, zoom]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef({ x: 0, y: 0 });
@@ -126,10 +145,14 @@ export function OfficeCanvas({
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(rect.width * dpr);
     canvas.height = Math.round(rect.height * dpr);
+    if (fitToViewport) {
+      if (officeState.cameraFollowId === null) panRef.current = { x: 0, y: 0 };
+      setViewport({ width: canvas.width, height: canvas.height });
+    }
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
     // No ctx.scale(dpr) — we render directly in device pixels
-  }, []);
+  }, [fitToViewport, officeState, panRef]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -163,7 +186,8 @@ export function OfficeCanvas({
           officeState.cameraFollowId !== null
             ? officeState.characters.get(officeState.cameraFollowId)
             : undefined;
-        const cameraFocus = followCh ?? officeState.greeterCameraTarget;
+        const cameraFocus =
+          followCh ?? (fitToViewport ? undefined : officeState.greeterCameraTarget);
         if (cameraFocus) {
           const layout = officeState.getLayout();
           const mapW = layout.cols * TILE_SIZE * zoom;
@@ -239,6 +263,7 @@ export function OfficeCanvas({
     panRef,
     showAreas,
     activeAreaLabel,
+    fitToViewport,
   ]);
 
   // Convert CSS mouse coords to world (sprite pixel) coords

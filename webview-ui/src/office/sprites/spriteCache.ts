@@ -63,6 +63,15 @@ export function getCachedSprite(sprite: SpriteData, zoom: number): HTMLCanvasEle
   const ctx = canvas.getContext('2d')!;
   ctx.imageSmoothingEnabled = false;
 
+  // MD2's small-screen overview can use fractional zoom. Rasterize once at
+  // native resolution before scaling, avoiding antialiasing every source pixel.
+  // Integer zoom retains the original Pixel Agents rendering path below.
+  if (!Number.isInteger(zoom)) {
+    ctx.drawImage(getCachedSprite(sprite, 1), 0, 0, canvas.width, canvas.height);
+    cache.set(sprite, canvas);
+    return canvas;
+  }
+
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const color = sprite[r][c];

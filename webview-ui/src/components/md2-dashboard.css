@@ -39,6 +39,7 @@ html.md2-dashboard .md2-office-region {
   font: inherit;
 }
 .md2-sidebar {
+  overflow-y: auto;
   position: absolute;
   inset: 6px auto 274px 6px;
   width: 166px;
@@ -505,4 +506,18 @@ html.md2-dashboard .md2-office-region {
 
 .md2-shell * {
   font-family: Arial, sans-serif;
+}
+
+/* Keep the original editor accessible without covering the departmental desks. */
+html.md2-dashboard .md2-office-region > .pixel-panel {
+  left: 6px;
+  bottom: 6px;
+  padding: 3px;
+}
+html.md2-dashboard .md2-office-region > .pixel-panel button {
+  font:
+    12px Arial,
+    sans-serif;
+  padding: 7px 10px;
+  min-height: 28px;
 }

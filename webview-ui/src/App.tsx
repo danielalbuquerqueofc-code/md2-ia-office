@@ -63,6 +63,7 @@ function getOfficeState(): OfficeState {
 
 function App() {
   const [isMd2Layout, setIsMd2Layout] = useState(false);
+  const [md2RenderZoom, setMd2RenderZoom] = useState(1);
   // Browser runtime (dev or static dist): dispatch mock messages after the
   // useExtensionMessages listener has been registered.
   useEffect(() => {
@@ -274,16 +275,17 @@ function App() {
   // user has toggled Show Areas off globally — they need to see what they're
   // editing. The selected area's overlay is alpha-bumped via activeAreaLabel.
   const isEditingAreas = editor.isEditMode && editorState.activeTool === EditTool.AREA_PAINT;
+  const { handleZoomChange: setOfficeZoom, panRef: officePanRef } = editor;
   useEffect(() => {
     const prepare = () => {
       setIsMd2Layout(true);
-      editor.handleZoomChange(1);
-      editor.panRef.current = { x: 0, y: 0 };
+      setOfficeZoom(1);
+      officePanRef.current = { x: 0, y: 0 };
       setShowAreas(true);
     };
     window.addEventListener('md2-dashboard-ready', prepare);
     return () => window.removeEventListener('md2-dashboard-ready', prepare);
-  }, [editor.handleZoomChange, editor.panRef, setShowAreas]);
+  }, [setOfficeZoom, officePanRef, setShowAreas]);
 
   const effectiveShowAreas = isEditingAreas || showAreas;
   const activeAreaLabel = isEditingAreas ? editor.selectedAreaLabel : null;
@@ -498,6 +500,8 @@ function App() {
         onDrop={editor.handleDrop}
         editorTick={editor.editorTick}
         zoom={editor.zoom}
+        fitToViewport={isMd2Layout && !editor.isEditMode}
+        onRenderZoomChange={isMd2Layout ? setMd2RenderZoom : undefined}
         onZoomChange={editor.handleZoomChange}
         panRef={editor.panRef}
         showAreas={effectiveShowAreas || isMd2Layout}
@@ -509,7 +513,9 @@ function App() {
         <>
           {/* Mobile: pinch replaces the zoom buttons, and the toolbar's
                 jobs move to the card bar (+) and the floating Settings button. */}
-          {!isMobile && <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />}
+          {!isMobile && (!isMd2Layout || editor.isEditMode) && (
+            <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />
+          )}
 
           {/* Vignette overlay */}
           <div
@@ -588,7 +594,7 @@ function App() {
             subagentTools={subagentTools}
             subagentCharacters={subagentCharacters}
             containerRef={containerRef}
-            zoom={editor.zoom}
+            zoom={isMd2Layout && !editor.isEditMode ? md2RenderZoom : editor.zoom}
             panRef={editor.panRef}
             onCloseAgent={handleCloseAgent}
             alwaysShowOverlay={alwaysShowOverlay}
