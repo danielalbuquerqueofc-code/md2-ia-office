@@ -53,6 +53,23 @@ describe('MD2 programmer and approval boundary', () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it('exposes seven planned departments without starting agents and links tasks to the programmer', async () => {
+    const initial = office.snapshot();
+    expect(initial.departments).toHaveLength(7);
+    expect(initial.departments.reduce((sum, department) => sum + department.positions, 0)).toBe(20);
+    expect(initial.agents[0]).toMatchObject({
+      id: 'codex-programmer',
+      departmentId: 'technology',
+      status: 'idle',
+    });
+    expect(calls).toHaveLength(0);
+    const task = await office.launch('Preparar projeto');
+    expect(task).toMatchObject({ departmentId: 'technology', assigneeId: 'codex-programmer' });
+    expect(office.snapshot().agents[0]).toMatchObject({ status: 'busy', taskId: task.id });
+    office.cancel(task.id);
+    expect(office.snapshot().agents[0].status).toBe('idle');
+  });
+
   it('creates a character after connection, maps tool events and distinguishes failure from success', async () => {
     const broadcasts: Record<string, unknown>[] = [];
     store.on('broadcast', (message) => {

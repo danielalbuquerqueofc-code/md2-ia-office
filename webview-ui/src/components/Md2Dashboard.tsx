@@ -2,15 +2,11 @@ import './md2-dashboard.css';
 
 import { useState } from 'react';
 
-const departments = [
-  ['Comercial e Vendas', 4, '◈'],
-  ['Marketing', 3, '▥'],
-  ['Operações', 3, '▤'],
-  ['Diretoria e Estratégia', 2, '◇'],
-  ['Financeiro', 2, '▣'],
-  ['Tecnologia', 4, '⌘'],
-  ['Atendimento', 2, '☏'],
-] as const;
+import { MD2_DEPARTMENTS } from '../../../core/src/md2Foundation.js';
+
+const departments = MD2_DEPARTMENTS.map(
+  ({ name, positions, icon }) => [name, positions, icon] as const,
+);
 const steps = [
   ['Você faz o pedido', '✎', 'Descreva o que precisa e o resultado esperado.'],
   ['Diretoria organiza', '◇', 'Planejamento e distribuição das tarefas.'],

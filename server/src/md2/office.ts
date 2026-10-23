@@ -2,12 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 
+import { MD2_DEPARTMENTS, MD2_PROGRAMMER } from '../../../core/src/md2Foundation.js';
 import { createAgentState } from '../agentState.js';
 import type { AgentStateStore } from '../agentStateStore.js';
 import { CodexClient, type RpcMessage } from './codexClient.js';
 
 export interface Md2Task {
   id: string;
+  departmentId?: 'technology';
+  assigneeId?: 'codex-programmer';
   prompt: string;
   status: 'running' | 'approval' | 'completed' | 'failed' | 'interrupted';
   createdAt: string;
@@ -71,6 +74,10 @@ export class Md2Office {
 
   snapshot() {
     return {
+      departments: MD2_DEPARTMENTS,
+      agents: [
+        { ...MD2_PROGRAMMER, status: this.active ? 'busy' : 'idle', taskId: this.active?.task.id },
+      ],
       tasks: this.tasks,
       approvals: this.approvals,
       busy: !!this.active,
@@ -83,6 +90,8 @@ export class Md2Office {
     if (this.active) throw new Error('O programador já está executando uma tarefa.');
     const task: Md2Task = {
       id: randomUUID(),
+      departmentId: MD2_PROGRAMMER.departmentId,
+      assigneeId: MD2_PROGRAMMER.id,
       prompt,
       status: 'running',
       createdAt: new Date().toISOString(),
