@@ -1,6 +1,8 @@
 # MD2 IA Office — primeira implementação
 
-Base preservada: Pixel Agents, PR #228, commit 6a85d0e8f248ba573a9f953fef3e1319e405c746.
+Repositório oficial de origem: https://github.com/pixel-agents-hq/pixel-agents (remote origin). O repositório privado md2-ia-office recebe somente as adaptações MD2 (remote md2).
+
+Base do protótipo Codex: PR #228 desse projeto, commit 6a85d0e8f248ba573a9f953fef3e1319e405c746. A main oficial consultada em 23/10/2026 está no commit b1bafd02896d90d83457266575a1e8e5011ce997, versão 1.5.0; a migração do protótipo para essa arquitetura ainda não foi realizada.
 Branch local: md2/primeira-versao.
 
 Esta versão é uma extensão VS Code, não um serviço web publicado.
@@ -42,3 +44,4 @@ Planejar inicialmente conversas individuais, opt-in, webhooks autenticados e mod
 Preservar LICENSE MIT e copyright Pablo De Lucca. Personagens creditados pelo upstream a JIK-A-4 / Metro City; não remover créditos e verificar a licença de cada pacote antes de redistribuição comercial. Não incluir packs externos sem verificar permissões.
 
 Fontes: https://github.com/pixel-agents-hq/pixel-agents ; https://github.com/pixel-agents-hq/pixel-agents/pull/228 ; https://learn.chatgpt.com/docs/app-server
+
