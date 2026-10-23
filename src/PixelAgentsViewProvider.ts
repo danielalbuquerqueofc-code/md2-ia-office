@@ -246,7 +246,19 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     });
 
     this.pixelAgentsServer = new PixelAgentsServer();
-    this.pixelAgentsServer.onHookEvent((providerId, event) => {
+    this.pixelAgentsServer.onHookEvent(async (providerId, event) => {
+      if (providerId === 'codex' && event.hook_event_name === 'Md2Approval') {
+        const known = [...this.agents.values()].some((a) => a.sessionId === event.session_id);
+        if (!known) return { decision: 'decline' };
+        const approved = await vscode.window.showWarningMessage(
+          'MD2 • Aprovação necessária',
+          { modal: true, detail: JSON.stringify(event.params, null, 2) },
+          'Aprovar esta ação',
+          'Rejeitar',
+        );
+        return { decision: approved === 'Aprovar esta ação' ? 'accept' : 'decline' };
+      }
+      if (providerId === 'codex') this.webview?.postMessage({ type: 'md2Event', event });
       if (providerId === 'claude') {
         this.hookEventHandler?.handleEvent(providerId, event as HookEvent);
         return;

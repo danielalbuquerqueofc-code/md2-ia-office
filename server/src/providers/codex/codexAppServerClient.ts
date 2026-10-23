@@ -53,7 +53,7 @@ export interface CodexAppServerClientOptions {
   onServerRequest?: (request: CodexJsonRpcRequest) => Awaitable<Record<string, unknown> | void>;
 }
 
-const DEFAULT_COMMAND = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+const DEFAULT_COMMAND = process.env['MD2_CODEX_COMMAND'] || 'codex';
 const DEFAULT_ARGS = ['app-server', '--listen', 'stdio://'];
 
 export class CodexAppServerClient {
@@ -259,7 +259,7 @@ export class CodexAppServerClient {
       method === 'item/commandExecution/requestApproval' ||
       method === 'item/fileChange/requestApproval'
     ) {
-      return { decision: 'accept' };
+      return { decision: 'decline' };
     }
     if (method === 'item/permissions/requestApproval') {
       return { permissions: {}, scope: 'turn' };

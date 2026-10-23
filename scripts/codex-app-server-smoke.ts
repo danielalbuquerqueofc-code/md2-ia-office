@@ -83,7 +83,7 @@ function createServerRequestResponse(request: CodexJsonRpcRequest): Record<strin
     request.method === 'item/commandExecution/requestApproval' ||
     request.method === 'item/fileChange/requestApproval'
   ) {
-    return { decision: 'accept' };
+    return { decision: 'decline' };
   }
   if (request.method === 'item/permissions/requestApproval') {
     return { permissions: {}, scope: 'turn' };
@@ -184,7 +184,7 @@ async function main(): Promise<void> {
     process.stdout.write(`Initialized Codex app-server: ${JSON.stringify(initializeResult)}\n`);
 
     const threadResult = await withTimeout(
-      client.startThread({ cwd: options.cwd, sessionStartSource: 'startup' }),
+      client.startThread({ cwd: options.cwd, sessionStartSource: 'startup', approvalPolicy: 'untrusted', sandbox: 'read-only' }),
       options.timeoutMs,
       'thread/start',
     );

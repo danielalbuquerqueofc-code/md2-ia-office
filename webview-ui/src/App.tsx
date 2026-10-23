@@ -5,6 +5,7 @@ import { BottomToolbar } from './components/BottomToolbar.js';
 import { ChangelogModal } from './components/ChangelogModal.js';
 import { DebugView } from './components/DebugView.js';
 import { EditActionBar } from './components/EditActionBar.js';
+import { Md2Panel } from './components/Md2Panel.js';
 import { MigrationNotice } from './components/MigrationNotice.js';
 import { SettingsModal } from './components/SettingsModal.js';
 import { Tooltip } from './components/Tooltip.js';
@@ -196,6 +197,7 @@ function App() {
 
   return (
     <div ref={containerRef} className="w-full h-full relative overflow-hidden">
+      <Md2Panel />
       <OfficeCanvas
         officeState={officeState}
         onClick={handleClick}

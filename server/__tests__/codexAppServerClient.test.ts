@@ -149,4 +149,18 @@ describe('CodexAppServerClient', () => {
 
     await client.close();
   });
+  it('denies command and file approvals without a human handler', async () => {
+    const client = new CodexAppServerClient({ spawnProcess: () => fakeProcess });
+    await client.start();
+    for (const method of [
+      'item/commandExecution/requestApproval',
+      'item/fileChange/requestApproval',
+    ]) {
+      fakeProcess.stdout.write(JSON.stringify({ id: method, method, params: {} }) + '\n');
+      expect(await writtenMessages.nextWhere((message) => message.id === method)).toMatchObject({
+        result: { decision: 'decline' },
+      });
+    }
+    await client.close();
+  });
 });

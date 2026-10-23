@@ -57,30 +57,39 @@ async function postCodexEvent(
   }
 }
 
-function createApprovalResponse(
+async function createApprovalResponse(
   request: CodexJsonRpcRequest,
   context: LaunchContext,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
+  if (request.method === 'item/permissions/requestApproval')
+    return { permissions: {}, scope: 'turn' };
   if (
-    request.method === 'item/commandExecution/requestApproval' ||
-    request.method === 'item/fileChange/requestApproval'
+    !['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(
+      request.method,
+    )
   ) {
-    return { decision: 'accept' };
+    throw new Error('Unsupported server request: ' + request.method);
   }
-
-  if (request.method === 'item/permissions/requestApproval') {
-    const requestedPermissions =
-      request.params && typeof request.params.permissions === 'object' && request.params.permissions
-        ? (request.params.permissions as Record<string, unknown>)
-        : {};
-
-    return {
-      permissions: context.bypassPermissions ? requestedPermissions : requestedPermissions,
-      scope: 'turn',
-    };
+  try {
+    const response = await fetch('http://127.0.0.1:' + context.serverPort + '/api/hooks/codex', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + context.serverToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        session_id: context.sessionId,
+        hook_event_name: 'Md2Approval',
+        params: { method: request.method, ...request.params },
+      }),
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!response.ok) return { decision: 'decline' };
+    const result = (await response.json()) as Record<string, unknown>;
+    return { decision: result.decision === 'accept' ? 'accept' : 'decline' };
+  } catch {
+    return { decision: 'decline' };
   }
-
-  return {};
 }
 
 function getThreadId(result: Record<string, unknown>, fallbackId: string): string {
@@ -187,6 +196,8 @@ async function main(): Promise<void> {
   const threadStart = await client.startThread({
     cwd: context.cwd,
     sessionStartSource: 'startup',
+    approvalPolicy: 'untrusted',
+    sandbox: 'workspace-write',
   });
   const threadId = getThreadId(threadStart, context.sessionId);
 

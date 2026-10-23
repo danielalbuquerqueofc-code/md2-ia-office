@@ -24,7 +24,7 @@ export interface ServerConfig {
 }
 
 /** Callback invoked when a hook event is received from a provider's hook script. */
-type HookEventCallback = (providerId: string, event: Record<string, unknown>) => void;
+type HookEventCallback = (providerId: string, event: Record<string, unknown>) => unknown;
 
 /**
  * HTTP server that receives hook events from CLI tool hook scripts.
@@ -196,12 +196,18 @@ export class PixelAgentsServer {
       }
     });
 
-    req.on('end', () => {
+    req.on('end', async () => {
       if (responded) return;
       try {
         const event = JSON.parse(body) as Record<string, unknown>;
         if (event.session_id && event.hook_event_name) {
-          this.callback?.(providerId, event);
+          if (event.hook_event_name === 'Md2Approval') req.socket.setTimeout(125000);
+          const result = await this.callback?.(providerId, event);
+          if (result && typeof result === 'object') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+            return;
+          }
         }
         res.writeHead(200);
         res.end('ok');

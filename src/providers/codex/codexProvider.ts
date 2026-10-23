@@ -35,7 +35,7 @@ function buildCodexLaunchPlan(input: ProviderLaunchRequest): ProviderLaunchPlan 
       PIXEL_AGENTS_SERVER_PORT: String(input.serverPort),
       PIXEL_AGENTS_SERVER_TOKEN: input.serverToken,
       PIXEL_AGENTS_CWD: input.cwd,
-      PIXEL_AGENTS_BYPASS_PERMISSIONS: input.bypassPermissions ? '1' : '0',
+      PIXEL_AGENTS_BYPASS_PERMISSIONS: '0',
     },
   };
 }
