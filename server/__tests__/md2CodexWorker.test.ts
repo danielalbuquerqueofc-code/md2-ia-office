@@ -37,7 +37,13 @@ describe('MD2 Codex worker against a simulated app-server process', () => {
   afterEach(() => {
     delete process.env['FAKE_CODEX_MODE'];
     delete process.env['FAKE_CODEX_LOG'];
-    fs.rmSync(root, { recursive: true, force: true });
+    // Windows may hold the attempt directory briefly after the process tree ends.
+    // Best effort: cleanup is not what these tests verify.
+    try {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    } catch {
+      // Left for the OS temp cleaner.
+    }
   });
 
   function input(): WorkerInput {

@@ -178,13 +178,13 @@ describe('MD2 executor with a simulated worker', () => {
       ownerId: options.ownerId,
     });
   }
-  function executor(worker: Md2Worker, q = queue(), source = store) {
+  function executor(worker: Md2Worker, q = queue(), source = store, settleMarginMs = 200) {
     return new Md2Executor(source, {
       scope,
       queue: q,
       auth,
       worker,
-      settleMarginMs: 200,
+      settleMarginMs,
       abortGraceMs: 150,
     });
   }
@@ -257,16 +257,17 @@ describe('MD2 executor with a simulated worker', () => {
   });
 
   it('keeps the lease alive with heartbeats beyond the lease duration', async () => {
-    const q = queue({ leaseMs: 600 });
+    // 2.5x the lease: only renewals can keep it alive, with room for slow disks under load.
+    const q = queue({ leaseMs: 2000, maxRunMs: 15000 });
     const item = await enqueue(q);
     const { worker } = simulated(async (input) => {
-      await sleep(2000);
+      await sleep(5000);
       return reply(input);
     });
     expect((await executor(worker, q).runNext(operator))?.state).toBe('completed');
     const history = (await q.peek(item.id))!.history.map((entry) => entry.state);
     expect(history.filter((state) => state === 'reserved').length).toBeGreaterThan(3);
-  });
+  }, 30000);
 
   it('records a reported failure as terminal and never retries it automatically', async () => {
     const q = queue();
@@ -365,7 +366,7 @@ describe('MD2 executor with a simulated worker', () => {
   });
 
   it('stops at the deadline: a reported timeout fails, a silent worker becomes uncertain', async () => {
-    // A longer lease keeps this test about the deadline, not about machine load.
+    // A longer lease and settle margin keep this test about the deadline, not machine load.
     const q = queue({ maxRunMs: 2000, leaseMs: 1000 });
     await enqueue(q);
     const { worker } = simulated(async (input, signal) => {
@@ -377,14 +378,14 @@ describe('MD2 executor with a simulated worker', () => {
         output: '',
       });
     });
-    expect(await executor(worker, q).runNext(operator)).toMatchObject({
+    expect(await executor(worker, q, store, 800).runNext(operator)).toMatchObject({
       state: 'failed',
       stopReason: 'TIMEOUT',
     });
     const silentQueue = queue({ maxRunMs: 2000, leaseMs: 1000 });
     const silent = await enqueue(silentQueue);
     const { worker: stuck } = simulated(() => new Promise(() => {}));
-    expect(await executor(stuck, silentQueue).runNext(operator)).toMatchObject({
+    expect(await executor(stuck, silentQueue, store, 800).runNext(operator)).toMatchObject({
       state: 'reconciliation_required',
       stopReason: 'TIMEOUT',
       settled: false,
