@@ -162,7 +162,9 @@ describe('MD2 executor with a simulated worker', () => {
       authenticate: async (context) => (context === session ? principal : null),
     });
   }
-  function queue(options: { source?: Md2Storage; ownerId?: string; maxRunMs?: number } = {}) {
+  function queue(
+    options: { source?: Md2Storage; ownerId?: string; maxRunMs?: number; leaseMs?: number } = {},
+  ) {
     const source = options.source ?? store;
     return new Md2Queue(source, {
       scope,
@@ -170,7 +172,8 @@ describe('MD2 executor with a simulated worker', () => {
       policy: source === store ? policy : new Md2Policy(source, { scope, grants }),
       limits: budget(scope),
       allocation: { tokens: 10, costMicros: 10 },
-      leaseMs: 300,
+      // Generous for slow disks under parallel load; production uses 60 s.
+      leaseMs: options.leaseMs ?? 1500,
       maxRunMs: options.maxRunMs ?? 4000,
       ownerId: options.ownerId,
     });
@@ -181,7 +184,6 @@ describe('MD2 executor with a simulated worker', () => {
       queue: q,
       auth,
       worker,
-      heartbeatMs: 50,
       settleMarginMs: 200,
       abortGraceMs: 150,
     });
@@ -255,10 +257,10 @@ describe('MD2 executor with a simulated worker', () => {
   });
 
   it('keeps the lease alive with heartbeats beyond the lease duration', async () => {
-    const q = queue();
+    const q = queue({ leaseMs: 600 });
     const item = await enqueue(q);
     const { worker } = simulated(async (input) => {
-      await sleep(900);
+      await sleep(2000);
       return reply(input);
     });
     expect((await executor(worker, q).runNext(operator))?.state).toBe('completed');
@@ -363,7 +365,8 @@ describe('MD2 executor with a simulated worker', () => {
   });
 
   it('stops at the deadline: a reported timeout fails, a silent worker becomes uncertain', async () => {
-    const q = queue({ maxRunMs: 700 });
+    // A longer lease keeps this test about the deadline, not about machine load.
+    const q = queue({ maxRunMs: 2000, leaseMs: 1000 });
     await enqueue(q);
     const { worker } = simulated(async (input, signal) => {
       await untilAbort(signal);
@@ -378,7 +381,7 @@ describe('MD2 executor with a simulated worker', () => {
       state: 'failed',
       stopReason: 'TIMEOUT',
     });
-    const silentQueue = queue({ maxRunMs: 700 });
+    const silentQueue = queue({ maxRunMs: 2000, leaseMs: 1000 });
     const silent = await enqueue(silentQueue);
     const { worker: stuck } = simulated(() => new Promise(() => {}));
     expect(await executor(stuck, silentQueue).runNext(operator)).toMatchObject({

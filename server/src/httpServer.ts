@@ -22,6 +22,8 @@ import {
   WS_CLOSE_UNAUTHORIZED,
 } from './constants.js';
 import { registerMd2Routes } from './md2/routes.js';
+import { createMd2Runtime, type Md2Runtime, runtimeConfigFromEnv } from './md2/runtime.js';
+import { Md2SecurityError } from './md2/securityLedger.js';
 import type { PtySessionManager } from './terminal/ptySessionManager.js';
 import { registerTerminalRoutes } from './terminal/terminalRoutes.js';
 import type { AgentState } from './types.js';
@@ -120,8 +122,29 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     if (existsSync(layoutFile))
       options.assetCache.defaultLayout = JSON.parse(readFileSync(layoutFile, 'utf8'));
   }
-  if (md2Enabled)
-    registerMd2Routes(app, { token: options.token, store: options.store, allowedHostnames });
+  if (md2Enabled) {
+    // Protected queue/executor API: off unless MD2_EXECUTOR_ENABLED=1. A misconfiguration keeps
+    // the legacy launch disabled and the new routes unavailable (fail closed). Only the error
+    // code is logged — never paths' contents, tokens or secrets.
+    let runtime: Md2Runtime | null | undefined;
+    if (process.env['MD2_EXECUTOR_ENABLED'] === '1') {
+      try {
+        const config = runtimeConfigFromEnv();
+        runtime = config ? await createMd2Runtime(config) : null;
+      } catch (error) {
+        runtime = null;
+        app.log.warn(
+          `[MD2] Executor desativado: ${error instanceof Md2SecurityError ? error.code : 'RUNTIME_FAILED'}`,
+        );
+      }
+    }
+    registerMd2Routes(app, {
+      token: options.token,
+      store: options.store,
+      allowedHostnames,
+      runtime,
+    });
+  }
   registerHealthRoute(app);
   registerHookRoute(app, options);
   registerWebSocketRoute(app, options, allowedHostnames);

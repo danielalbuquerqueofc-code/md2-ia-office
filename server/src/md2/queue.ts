@@ -469,6 +469,32 @@ export class Md2Queue {
     );
     return structuredClone(item);
   }
+  /** Privileged aggregate for the office view: counts per state and items holding a lease. */
+  async summary(): Promise<{
+    counts: Record<QueueState, number>;
+    holding: { id: string; agentId: string; state: QueueState; priority: DemandPriority }[];
+  }> {
+    const counts: Record<QueueState, number> = {
+      queued: 0,
+      blocked: 0,
+      reserved: 0,
+      reconciliation_required: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    };
+    const items = project(await this.snapshot());
+    for (const item of items) counts[item.state] += 1;
+    return {
+      counts,
+      holding: items.filter(holding).map((item) => ({
+        id: item.id,
+        agentId: item.agentId,
+        state: item.state,
+        priority: item.priority,
+      })),
+    };
+  }
   /** Privileged host read for the executor; never expose it to tenant sessions. */
   async peek(id: string): Promise<QueueItem | null> {
     const item = project(await this.snapshot()).find((item) => item.id === id);

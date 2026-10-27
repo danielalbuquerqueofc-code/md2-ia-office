@@ -114,3 +114,30 @@ Limites: a aplicação efetiva do sandbox depende da versão do Codex e do siste
 sandbox do Codex pode não isolar como em Linux/macOS) — validar na primeira execução autorizada.
 Os nomes de notificação de consumo do app-server podem mudar entre versões. Os testes usam um
 app-server simulado em Node (`server/__tests__/fixtures/fakeCodexAppServer.cjs`).
+
+## API protegida (03C-06)
+
+`MD2_EXECUTOR_ENABLED=1` (padrão desligado) faz o servidor montar `createMd2Runtime`
+(`server/src/md2/runtime.ts`) e registrar as rotas em `/api/md2`. Toda rota continua atrás do
+gate existente (token do servidor, Host permitido e Origin), agora avaliado em `onRequest`, antes
+de qualquer leitura do corpo. Depois dele, cada rota exige a sessão do operador no header
+`x-md2-session`.
+
+| Rota                                                                                                                            | Permissão                     |
+| ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `POST /operator/login`, `/operator/logout`, `/operator/rotate`, `GET /operator/me`                                              | segredo do operador / sessão  |
+| `POST /demands`                                                                                                                 | `director.submit` (papel ceo) |
+| `POST /queue`                                                                                                                   | `director.submit`             |
+| `GET /queue-state`, `GET /queue/:id`                                                                                            | `queue.read`                  |
+| `POST /queue/:id/approval` (mostra ação exata e digest)                                                                         | `queue.operate`               |
+| `POST /queue/:id/approval/:requestId/decide` (exige o segredo de novo)                                                          | `approval.decide`             |
+| `POST /executor/run-next` (`{ "wait": true }` opcional), `/executor/cancel/:id`, `/executor/recover`, `/executor/reconcile/:id` | `queue.operate`               |
+
+- Com a flag ligada, `POST /api/md2/tasks` (caminho antigo do programador) responde 409: a fila é o
+  único caminho de execução e a trava global de 1 vale para tudo.
+- Configuração inválida com a flag ligada → rotas novas respondem 503 e o caminho antigo continua
+  desligado (falha fechada). O log registra só o código do erro.
+- Política: a triagem do diretor considera Lucas, Fernanda e Rafael elegíveis para receber
+  demandas, mas **toda execução exige aprovação humana** ligada ao digest da ação.
+- Worker: `MD2_WORKER=disabled` (padrão, `run-next` → 503), `simulated` (local, sem IA) ou `codex`
+  (exige autorização separada antes do primeiro uso).

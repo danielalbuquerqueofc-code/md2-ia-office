@@ -140,10 +140,21 @@ describe('MD2 Codex worker against a simulated app-server process', () => {
     });
   });
 
+  /** Waits (under load too) until the simulated server has received turn/start. */
+  async function turnStarted(ms = 10000) {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (fs.existsSync(logFile) && entries().some((entry) => entry.method === 'turn/start'))
+        return;
+      await sleep(25);
+    }
+    throw new Error('simulated turn never started');
+  }
+
   it('stops on timeout and terminates the process', async () => {
     const controller = new AbortController();
     const running = worker('hang').run(input(), controller.signal);
-    await sleep(600);
+    await turnStarted();
     controller.abort('TIMEOUT');
     expect(await running).toMatchObject({ outcome: 'unknown', reason: 'TIMEOUT' });
     expect(await waitDead(entries()[0].pid as number)).toBe(true);
@@ -152,8 +163,9 @@ describe('MD2 Codex worker against a simulated app-server process', () => {
   it('cancels and terminates the whole process tree, including grandchildren', async () => {
     const controller = new AbortController();
     const running = worker('hang-tree').run(input(), controller.signal);
-    await sleep(800);
+    await turnStarted();
     const grandchild = entries().find((entry) => entry.grandchild)?.grandchild as number;
+    expect(Number.isSafeInteger(grandchild)).toBe(true);
     expect(alive(grandchild)).toBe(true);
     controller.abort('CANCELLED_BY_OPERATOR');
     expect(await running).toMatchObject({ outcome: 'cancelled' });
