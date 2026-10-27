@@ -43,6 +43,14 @@ export interface PolicyGrant {
 export type PolicyDecision =
   | { decision: 'deny'; reason: string }
   | { decision: 'allow' | 'approval-required'; digest: string };
+export interface AssignmentRequest {
+  agentId: string;
+  capability: Capability;
+  kind: ActionKind;
+  scope: StorageScope;
+}
+export type AssignmentAssessment =
+  { eligibility: 'denied'; reason: string } | { eligibility: 'eligible' | 'approval-required' };
 interface ApprovalRequest {
   requestId: string;
   taskId: string;
@@ -233,16 +241,27 @@ export class Md2Policy {
   }
   private evaluateAt(action: PolicyAction, snapshot: StorageSnapshot): PolicyDecision {
     const digest = actionDigest(action);
+    const denied = this.scopeOrCapabilityDenial(action, snapshot);
+    if (denied) return { decision: 'deny', reason: denied };
+    requireTask(snapshot, action.taskId, action.agentId);
+    const decision = this.grantDecision(action);
+    return decision.decision === 'deny' ? decision : { ...decision, digest };
+  }
+  private scopeOrCapabilityDenial(action: PolicyAction, snapshot: StorageSnapshot): string | null {
     if (
       !sameScope(action.scope, this.scope) ||
       !sameScope(action.resource.scope, this.scope) ||
       !sameScope(snapshot, this.scope)
     )
-      return { decision: 'deny', reason: 'CROSS_SCOPE' };
+      return 'CROSS_SCOPE';
     const agent = MD2_AGENT_REGISTRY.find((item) => item.id === action.agentId);
     if (!agent || !(agent.capabilities as readonly string[]).includes(action.capability))
-      return { decision: 'deny', reason: 'CAPABILITY_NOT_DECLARED' };
-    requireTask(snapshot, action.taskId, action.agentId);
+      return 'CAPABILITY_NOT_DECLARED';
+    return null;
+  }
+  private grantDecision(
+    action: PolicyAction,
+  ): { decision: 'deny'; reason: string } | { decision: 'allow' | 'approval-required' } {
     if (!['internal.analyze', 'internal.draft', 'local.execute'].includes(action.kind))
       return { decision: 'deny', reason: 'ACTION_DENIED_BY_DEFAULT' };
     const grant = this.grants.find(
@@ -255,8 +274,28 @@ export class Md2Policy {
     return {
       decision:
         action.kind === 'local.execute' || grant.requireApproval ? 'approval-required' : 'allow',
-      digest,
     };
+  }
+  /** Eligibility only: no task, execution permission, approval or reservation is created. */
+  async assessAssignment(request: AssignmentRequest): Promise<AssignmentAssessment> {
+    const copied = structuredClone(request);
+    const action: PolicyAction = {
+      id: 'assignment-preflight',
+      taskId: 'assignment-preflight',
+      agentId: copied.agentId,
+      capability: copied.capability,
+      kind: copied.kind,
+      scope: copied.scope,
+      resource: { scope: copied.scope, id: 'assignment-preflight' },
+      parameters: {},
+    };
+    actionDigest(action);
+    const denied = this.scopeOrCapabilityDenial(action, await readSecurityStore(this.store));
+    if (denied) return { eligibility: 'denied', reason: denied };
+    const decision = this.grantDecision(action);
+    return decision.decision === 'deny'
+      ? { eligibility: 'denied', reason: decision.reason }
+      : { eligibility: decision.decision === 'allow' ? 'eligible' : 'approval-required' };
   }
   async evaluate(action: PolicyAction): Promise<PolicyDecision> {
     return this.evaluateAt(action, await readSecurityStore(this.store));
