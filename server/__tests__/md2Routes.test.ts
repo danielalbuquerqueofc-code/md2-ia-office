@@ -341,6 +341,29 @@ describe('MD2 protected routes (MD2_EXECUTOR_ENABLED)', () => {
     ).rejects.toMatchObject({ code: 'RUNTIME_DATA_ROOT_INSIDE_CHECKOUT' });
   });
 
+  it('adds aggregate queue counts to the office state only when the executor is on', async () => {
+    await build();
+    const token = await login();
+    await queued(token, 'lead-request-state');
+    const state = (await call('GET', '/state')).json();
+    expect(state.queue).toMatchObject({
+      available: true,
+      worker: 'simulated',
+      running: false,
+      counts: { blocked: 1, queued: 0, completed: 0 },
+    });
+    expect(JSON.stringify(state.queue)).not.toContain('Prospecção');
+    await app.close();
+    app = Fastify();
+    registerMd2Routes(app, {
+      token: 'server-token',
+      store: new AgentStateStore(),
+      allowedHostnames: new Set(['localhost']),
+      office: office(),
+    });
+    expect((await call('GET', '/state')).json().queue).toBeUndefined();
+  });
+
   describe('commercial pilot (internal only)', () => {
     const hotLead = {
       reference: 'clinica-sol-001',

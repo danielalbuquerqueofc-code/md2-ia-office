@@ -51,6 +51,22 @@ const consumptionSchema = {
   },
 };
 
+async function queueView(runtime: Md2Runtime | null) {
+  if (!runtime) return { available: false as const };
+  try {
+    const summary = await runtime.queue.summary();
+    return {
+      available: true as const,
+      worker: runtime.workerMode,
+      running: runtime.run.active !== null,
+      counts: summary.counts,
+      holding: summary.holding.map((item) => ({ agentId: item.agentId, state: item.state })),
+    };
+  } catch {
+    return { available: false as const };
+  }
+}
+
 export function registerMd2Routes(
   app: FastifyInstance,
   options: {
@@ -91,7 +107,11 @@ export function registerMd2Routes(
           return reply.code(403).send({ error: 'Origem não autorizada.' });
         }
       });
-      scoped.get('/state', async () => office.snapshot());
+      // Office view: aggregate queue counts only (no lead data); behind the same server gate.
+      scoped.get('/state', async () => ({
+        ...office.snapshot(),
+        queue: executorMode ? await queueView(options.runtime ?? null) : undefined,
+      }));
       scoped.post<{ Body: { prompt: string } }>(
         '/tasks',
         {

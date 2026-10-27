@@ -23,7 +23,32 @@ type Approval = {
   reviewable: boolean;
   status: string;
 };
-type Snapshot = { tasks: Task[]; approvals: Approval[]; busy: boolean; workspace: string };
+/** Present only when MD2_EXECUTOR_ENABLED=1: aggregate counts of the protected queue. */
+type QueueView =
+  | { available: false }
+  | {
+      available: true;
+      worker: string;
+      running: boolean;
+      counts: Record<
+        | 'queued'
+        | 'blocked'
+        | 'reserved'
+        | 'reconciliation_required'
+        | 'completed'
+        | 'failed'
+        | 'cancelled',
+        number
+      >;
+      holding: { agentId: string; state: string }[];
+    };
+type Snapshot = {
+  tasks: Task[];
+  approvals: Approval[];
+  busy: boolean;
+  workspace: string;
+  queue?: QueueView;
+};
 const labels: Record<string, string> = {
   running: 'Trabalhando',
   approval: 'Aguardando sua decisão',
@@ -134,7 +159,19 @@ export function Md2OfficePanel() {
                   <p className="text-text-muted break-all" title={snapshot?.workspace}>
                     Projeto: {snapshot?.workspace.split(/[\\/]/).pop() ?? 'Conectando…'}
                   </p>
-                  {!snapshot?.busy && (
+                  {snapshot?.queue && (
+                    <p role="status" className="text-text-muted">
+                      {snapshot.queue.available
+                        ? `Fila MD2 (${snapshot.queue.worker === 'disabled' ? 'execução desligada' : snapshot.queue.worker === 'simulated' ? 'simulação local' : 'Codex'}): ` +
+                          `${snapshot.queue.counts.queued} na fila · ` +
+                          `${snapshot.queue.counts.blocked} aguardando aprovação · ` +
+                          `${snapshot.queue.running ? 'executando' : 'parada'} · ` +
+                          `${snapshot.queue.counts.reconciliation_required} a reconciliar · ` +
+                          `${snapshot.queue.counts.completed} concluídas`
+                        : 'Fila MD2 indisponível: verifique a configuração do servidor.'}
+                    </p>
+                  )}
+                  {!snapshot?.busy && !snapshot?.queue && (
                     <form
                       onSubmit={(event) => {
                         event.preventDefault();
