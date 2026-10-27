@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { sanitizeMd2Changes } from './sanitize.js';
 import {
   applyChanges,
   DEFAULT_STORAGE_LIMITS,
@@ -125,7 +126,7 @@ export class Md2Storage {
         schemaVersion: 1,
         revision: current.revision + 1,
         updatedAt: now,
-        data: applyChanges(current.data, copied, now),
+        data: applyChanges(current.data, sanitizeMd2Changes(copied, current.data), now),
       });
       this.persist(snapshot, current);
       return snapshot;

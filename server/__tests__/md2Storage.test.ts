@@ -226,11 +226,10 @@ describe('MD2 local persistent storage', () => {
     'api_key=example-value',
     'password=example-value',
     'token=example-value',
-  ])('refuses common credential content before disk write (%#)', async (prompt) => {
+  ])('redacts common credential content before writing new records (%#)', async (prompt) => {
     await store.initialize();
-    await expect(store.commit({ tasks: [{ ...task(), prompt }] }, 1)).rejects.toMatchObject({
-      code: 'INVALID',
-    });
+    const saved = await store.commit({ tasks: [{ ...task(), prompt }] }, 1);
+    expect(saved.data.tasks[0].prompt).toContain('[REDACTED]');
     expect(fs.readFileSync(store.file, 'utf8')).not.toContain('example-value');
     expect(fs.existsSync(store.file + '.pending')).toBe(false);
   });

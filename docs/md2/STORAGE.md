@@ -66,9 +66,11 @@ automático ou API de exclusão. Backups e arquivos preservados exigirão polít
 própria de arquivamento; não são apagados nesta fase.
 
 O esquema não aceita campos arbitrários, credenciais, ambiente ou configurações
-de provedores. Textos com padrões comuns de credenciais são recusados antes da
-escrita, sem incluir o conteúdo no erro. Essa detecção não reconhece todos os
-segredos possíveis: o chamador deve fornecer conteúdo revisado e sem credenciais.
+de provedores. Desde a Fase 02D, novos textos passam por redação de formatos comuns
+de credenciais antes da escrita; o validador ainda recusa padrões residuais que
+reconheça, sem incluir o conteúdo no erro. Históricos existentes não são varridos.
+Essa detecção não reconhece todos os segredos possíveis: o chamador deve fornecer
+conteúdo revisado e sem credenciais.
 Não há criptografia em repouso; usar ACLs apropriadas no Windows. Arquivos novos
 usam modo `0600` e diretórios novos `0700` onde o sistema respeita esses modos.
 
