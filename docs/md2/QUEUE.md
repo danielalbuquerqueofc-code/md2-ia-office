@@ -101,6 +101,31 @@ Se a confirmação de escrita se perder, consultar o estado antes de repetir: um
 lease persistido continua retido, e um encerramento já persistido pode ser
 reconhecido idempotentemente para sincronizar o bloqueio em memória.
 
+## Renovação de lease e encerramentos repetidos (03C-02 e 03C-04)
+
+Cada nova reserva grava `deadlineAt = emissão + maxRunMs` (padrão 30 min, entre
+`leaseMs` e 24 h). `heartbeat(id, leaseId, attemptId)` renova somente um lease
+`reserved` do próprio dono, com os mesmos IDs, antes de vencer; o `expiresAt` só
+avança e nunca passa de `deadlineAt`. Uma instância com `maxRunMs` maior não amplia o
+prazo gravado. Lease vencido, de outro dono, em reconciliação ou anterior a 03C-02
+(sem `deadlineAt`) nunca é renovado; registros antigos continuam válidos.
+
+O histórico aceita `reserved → reserved` apenas como renovação válida: todos os
+campos iguais, exceto `expiresAt` maior e dentro do prazo. Cada renovação é um evento
+imutável; com o padrão de 60 s e heartbeat a cada 20 s, uma tarefa de 30 min gera
+cerca de 90 eventos, dentro do limite do armazenamento.
+
+`release` repetido é reconhecido apenas enquanto o release daquele lease (ou a falha
+por teto de tentativas que ele gerou) ainda é o último evento do item, com o mesmo dono
+e consumo zero. `confirm`/`fail` repetidos exigem também o mesmo motivo gravado.
+
+`peek(id)` é leitura privilegiada para o executor. `requireReconciliation(id, leaseId,
+motivo)` permite ao dono do lease declarar resultado incerto (`OUTCOME_UNKNOWN`,
+`TIMEOUT`, `WORKER_NO_RESULT`, `RESULT_NOT_PERSISTED`): o item passa a
+`reconciliation_required` mantendo lease, exclusão global e orçamento.
+
+O executor que usa esses contratos está descrito em `EXECUTOR.md`.
+
 ## Limitações e próximo checkpoint
 
 A recuperação descobre os projetos no catálogo `.md2-office/storage` de cada raiz
@@ -119,6 +144,7 @@ Permanecem os riscos de armazenamento sem criptografia, ACLs do Windows, redaç�
 heurística e relógio do host. APIs de encerramento pressupõem informação verdadeira
 do host; o sistema não observa efeitos externos porque não os executa nesta fase.
 
-Checkpoint 03C: revisar o contrato do worker, autenticação de operadores e protocolo
-de início/encerramento. Executor Codex, aprovações atuais, interface, integrações,
-chamadas de IA e produção permanecem fora desta etapa, aguardando autorização.
+Situação em 03C-04: contrato do worker (03C-02), autenticação de operadores
+(03C-03, ver `OPERATORS.md`) e executor com worker simulado (03C-04, ver
+`EXECUTOR.md`) estão implementados. Executor Codex real, rotas, interface,
+integrações, chamadas de IA e produção permanecem fora, aguardando autorização.

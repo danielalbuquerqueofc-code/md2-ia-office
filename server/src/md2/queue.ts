@@ -469,6 +469,11 @@ export class Md2Queue {
     );
     return structuredClone(item);
   }
+  /** Privileged host read for the executor; never expose it to tenant sessions. */
+  async peek(id: string): Promise<QueueItem | null> {
+    const item = project(await this.snapshot()).find((item) => item.id === id);
+    return item ? structuredClone(item) : null;
+  }
   async actionForNextAttempt(id: string): Promise<PolicyAction> {
     const snapshot = await this.snapshot();
     return this.action(this.item(snapshot, id), snapshot);
@@ -748,6 +753,33 @@ export class Md2Queue {
         const expiresAt = Math.min(now + this.leaseMs, deadline);
         if (expiresAt <= lease.expiresAt) return null;
         return { ...recordOf(item), lease: { ...lease, expiresAt } };
+      }),
+    );
+  }
+  /**
+   * The lease owner declares that the outcome is uncertain. The item keeps its lease, slot and
+   * budget until an explicit reconciliation. Expiry is not required: marking doubt is always safe.
+   */
+  requireReconciliation(
+    id: string,
+    leaseId: string,
+    reason: 'OUTCOME_UNKNOWN' | 'TIMEOUT' | 'WORKER_NO_RESULT' | 'RESULT_NOT_PERSISTED',
+  ): Promise<QueueItem> {
+    enforce(
+      ['OUTCOME_UNKNOWN', 'TIMEOUT', 'WORKER_NO_RESULT', 'RESULT_NOT_PERSISTED'].includes(reason),
+      'QUEUE_INVALID_RECONCILIATION',
+    );
+    return serial(() =>
+      this.change(id, (item) => {
+        if (item.state === 'reconciliation_required' && item.lease?.id === leaseId) return null;
+        enforce(
+          item.state === 'reserved' &&
+            item.lease !== null &&
+            item.lease.id === leaseId &&
+            item.lease.ownerId === this.ownerId,
+          'QUEUE_LEASE_INVALID_OR_EXPIRED',
+        );
+        return { ...recordOf(item), state: 'reconciliation_required', reason };
       }),
     );
   }
