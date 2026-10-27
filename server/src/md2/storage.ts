@@ -85,6 +85,47 @@ export class Md2Storage {
   read(): Promise<StorageSnapshot | null> {
     return serial(this.key, () => this.readCurrent());
   }
+  /** Privileged startup inventory, never a tenant-facing API. No data is migrated or repaired. */
+  projectStoresForRecovery(): Md2Storage[] {
+    this.checkPaths();
+    const catalog = path.dirname(this.directory);
+    if (!exists(catalog)) return [this];
+    const stores: Md2Storage[] = [];
+    for (const entry of fs.readdirSync(catalog, { withFileTypes: true })) {
+      if (!/^[a-f0-9]{64}$/.test(entry.name)) continue;
+      requireStorage(
+        entry.isDirectory() && !entry.isSymbolicLink(),
+        'Catálogo de projetos MD2 inseguro.',
+      );
+      const file = path.join(catalog, entry.name, 'state-v1.json');
+      const source = [file, file + '.pending', file + '.backup'].find(exists);
+      if (!source) {
+        if (fs.readdirSync(path.dirname(file)).length)
+          throw new Md2StorageError(
+            'RECOVERY_REQUIRED',
+            'Projeto sem manifesto principal; revisão manual necessária.',
+          );
+        continue;
+      }
+      requireStorage(
+        !fs.lstatSync(source).isSymbolicLink() && fs.lstatSync(source).isFile(),
+        'Manifesto MD2 inseguro.',
+      );
+      const manifest = this.parseFile(source) as Partial<StorageScope> | null;
+      requireStorage(
+        manifest && validId(manifest.clientId) && validId(manifest.projectId),
+        'Escopo de recuperação MD2 inválido.',
+      );
+      const store = new Md2Storage({
+        root: this.root,
+        scope: { clientId: manifest.clientId, projectId: manifest.projectId },
+        limits: this.limits,
+      });
+      requireStorage(store.file === file, 'Manifesto fora do escopo MD2.');
+      stores.push(store);
+    }
+    return stores;
+  }
 
   initialize(): Promise<StorageSnapshot> {
     return serial(this.key, () => {

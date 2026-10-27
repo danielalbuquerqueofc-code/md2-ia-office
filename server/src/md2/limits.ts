@@ -8,7 +8,7 @@ import {
   securityRecords,
   type SecurityStore,
 } from './securityLedger.js';
-import type { StorageScope, StorageSnapshot } from './storage.js';
+import type { StorageChanges, StorageScope, StorageSnapshot } from './storage.js';
 import { validId } from './storageSchema.js';
 
 export interface LimitBand {
@@ -230,6 +230,7 @@ export class Md2Limits {
     taskId: string,
     agentId: string,
     reservation: Reservation,
+    transaction?: (snapshot: StorageSnapshot, attemptId: string) => StorageChanges,
   ): Promise<{ attemptId: string }> {
     const copied = structuredClone(reservation);
     enforce(validReservation(copied), 'INVALID_RESERVATION');
@@ -277,6 +278,7 @@ export class Md2Limits {
         );
         return {
           taskId,
+          changes: transaction?.(snapshot, attemptId),
           record: {
             attemptId,
             taskId,
@@ -293,13 +295,37 @@ export class Md2Limits {
       return result;
     });
   }
-  settle(attemptId: string, actual: Consumption): Promise<void> {
-    return this.recordActual(attemptId, actual, false);
+  settle(
+    attemptId: string,
+    actual: Consumption,
+    transaction?: (snapshot: StorageSnapshot) => StorageChanges,
+  ): Promise<void> {
+    return this.recordActual(attemptId, actual, false, transaction);
   }
   reconcile(attemptId: string, actual: { tokens: number; costMicros: number }): Promise<void> {
     return this.recordActual(attemptId, actual, true);
   }
-  private recordActual(attemptId: string, actual: Consumption, reconcile: boolean): Promise<void> {
+  /** Clear only a slot whose durable settlement was already confirmed (e.g. lost acknowledgement). */
+  synchronize(): Promise<void> {
+    return exclusive(async () => {
+      const snapshot = await readSecurityStore(this.store);
+      this.checkScope(snapshot);
+      if (active && scopeMatches(active, this.config.scope)) {
+        const record = attempts(snapshot).find(
+          (attempt) => attempt.attemptId === active?.attemptId,
+        );
+        // Another registered root may use the same client/project IDs. Absence
+        // is never proof of settlement and must not clear its global slot.
+        if (record && record.kind !== 'reserved') active = undefined;
+      }
+    });
+  }
+  private recordActual(
+    attemptId: string,
+    actual: Consumption,
+    reconcile: boolean,
+    transaction?: (snapshot: StorageSnapshot) => StorageChanges,
+  ): Promise<void> {
     const copied = structuredClone(actual);
     enforce(
       validId(attemptId) &&
@@ -330,6 +356,7 @@ export class Md2Limits {
         // Real overspend is recorded honestly, even if it exceeds the original reservation.
         return {
           taskId: prior.taskId,
+          changes: transaction?.(snapshot),
           record: { ...prior, kind: reconcile ? 'reconciled' : 'settled', actual: copied },
           result: undefined,
         };

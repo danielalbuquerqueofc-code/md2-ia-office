@@ -10,7 +10,7 @@ import {
   securityRecords,
   type SecurityStore,
 } from './securityLedger.js';
-import type { StorageScope, StorageSnapshot } from './storage.js';
+import type { StorageChanges, StorageScope, StorageSnapshot } from './storage.js';
 import { validId } from './storageSchema.js';
 
 type Capability = Md2BusinessAgent['capabilities'][number];
@@ -299,6 +299,40 @@ export class Md2Policy {
   }
   async evaluate(action: PolicyAction): Promise<PolicyDecision> {
     return this.evaluateAt(action, await readSecurityStore(this.store));
+  }
+  /** Trusted transaction builder only. No authorization is released until its events are committed. */
+  planAuthorization(
+    action: PolicyAction,
+    snapshot: StorageSnapshot,
+    approvalId?: string,
+  ): StorageChanges {
+    const evaluated = this.evaluateAt(action, snapshot);
+    enforce(
+      evaluated.decision !== 'deny',
+      evaluated.decision === 'deny' ? 'POLICY_' + evaluated.reason : 'POLICY_DENIED',
+    );
+    if (evaluated.decision === 'allow') return {};
+    enforce(approvalId, 'APPROVAL_REQUIRED');
+    const prior = approvals(snapshot).get(approvalId);
+    enforce(
+      prior &&
+        prior.state === 'approved' &&
+        prior.reviewerId &&
+        this.reviewers.has(prior.reviewerId) &&
+        prior.digest === evaluated.digest &&
+        this.now(snapshot) < prior.expiresAt,
+      'APPROVAL_MISMATCH_EXPIRED_OR_USED',
+    );
+    return {
+      events: [
+        {
+          id: 'policy-' + randomUUID(),
+          taskId: action.taskId,
+          type: 'approval',
+          message: JSON.stringify({ namespace: 'md2.policy.v1', ...prior, state: 'consumed' }),
+        },
+      ],
+    };
   }
   requestApproval(action: PolicyAction, ttlMs = 120000): Promise<Readonly<ApprovalRequest>> {
     const copied = structuredClone(action);

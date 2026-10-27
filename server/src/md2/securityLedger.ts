@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { MD2_AGENT_REGISTRY } from '../../../core/src/md2AgentRegistry.js';
 import { redactMd2Text } from './sanitize.js';
-import type { Md2Storage, StorageSnapshot } from './storage.js';
+import type { Md2Storage, StorageChanges, StorageSnapshot } from './storage.js';
 import { Md2StorageError, requireStorage, validId } from './storageSchema.js';
 
 export type SecurityStore = Pick<Md2Storage, 'read' | 'commit'>;
@@ -40,17 +40,24 @@ export async function readSecurityStore(store: SecurityStore): Promise<StorageSn
 export async function appendSecurityEvent<T>(
   store: SecurityStore,
   prefix: 'policy' | 'limits',
-  decide: (snapshot: StorageSnapshot) => { taskId: string; record: object; result: T },
+  decide: (snapshot: StorageSnapshot) => {
+    taskId: string;
+    record: object;
+    result: T;
+    changes?: StorageChanges;
+  },
 ): Promise<T> {
   for (let attempt = 0; attempt < 8; attempt++) {
     const snapshot = await readSecurityStore(store);
-    const { taskId, record, result } = decide(snapshot);
+    const { taskId, record, result, changes } = decide(snapshot);
     const message = JSON.stringify({ namespace: `md2.${prefix}.v1`, ...record });
     enforce(redactMd2Text(message) === message, 'SENSITIVE_SECURITY_METADATA');
     try {
       await store.commit(
         {
+          ...changes,
           events: [
+            ...(changes?.events ?? []),
             {
               id: `${prefix}-${randomUUID()}`,
               taskId,

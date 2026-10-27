@@ -551,8 +551,24 @@ export class Md2Director {
     throw new Error('DIRECTOR_CONFLICT_RETRY_LIMIT');
   }
   async get(id: string, context: unknown): Promise<DirectorDemand | null> {
+    return this.getAuthorized(id, context, 'director.read');
+  }
+  /** Distribution requires submit permission; a read-only CEO session cannot enqueue work. */
+  async getForDistribution(id: string, context: unknown): Promise<DirectorDemand> {
+    const demand = await this.getAuthorized(id, context, 'director.submit');
+    enforce(
+      demand && demand.status === 'classified' && demand.classification,
+      'DIRECTOR_DEMAND_NOT_ELIGIBLE',
+    );
+    return demand;
+  }
+  private async getAuthorized(
+    id: string,
+    context: unknown,
+    permission: 'director.read' | 'director.submit',
+  ): Promise<DirectorDemand | null> {
     enforce(typeof id === 'string' && /^demand-[a-f0-9]{48}$/.test(id), 'DIRECTOR_INVALID_ID');
-    const principal = await this.principal(context, 'director.read');
+    const principal = await this.principal(context, permission);
     const snapshot = await this.snapshot();
     enforce(
       Date.parse(snapshot.updatedAt) < principal.expiresAt && Date.now() < principal.expiresAt,
