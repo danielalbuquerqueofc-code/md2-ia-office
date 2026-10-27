@@ -6,6 +6,7 @@ import type { AgentStateStore } from '../agentStateStore.js';
 import { bearerTokenValid, isAllowedWebSocketOrigin, normalizeHostname } from '../wsAuth.js';
 import type { DemandIntent, DemandPriority } from './director.js';
 import { Md2Office } from './office.js';
+import type { LeadInput, MessageKind, PilotAgent } from './pilot.js';
 import type { Md2Runtime } from './runtime.js';
 import { enforce, Md2SecurityError } from './securityLedger.js';
 
@@ -320,6 +321,107 @@ function registerExecutorRoutes(app: FastifyInstance, runtime: Md2Runtime | null
         if (request.body.decision === 'decline') return { decision: 'decline' };
         return { decision: 'approve', item: await r.queue.attachApproval(id, requestId) };
       }),
+  );
+
+  // Commercial pilot: internal records and drafts only. Nothing is sent or scheduled outside.
+  app.get('/pilot/leads', async (request, reply) =>
+    guarded(reply, () => need().pilot.list(session(request))),
+  );
+  app.get<{ Params: { id: string } }>('/pilot/leads/:id', async (request, reply) =>
+    guarded(reply, () => need().pilot.get(session(request), request.params.id)),
+  );
+  app.post<{ Body: LeadInput }>(
+    '/pilot/leads',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['reference', 'company', 'source'],
+          additionalProperties: false,
+          properties: {
+            reference: { type: 'string', maxLength: 80 },
+            company: { type: 'string', maxLength: 120 },
+            contactName: { type: 'string', maxLength: 120 },
+            role: { type: 'string', maxLength: 80 },
+            segment: { type: 'string', maxLength: 80 },
+            source: {
+              type: 'string',
+              enum: ['manual', 'indicacao', 'evento', 'inbound', 'base-propria'],
+            },
+            need: { type: 'string', maxLength: 1000 },
+            notes: { type: 'string', maxLength: 1000 },
+          },
+        },
+      },
+    },
+    async (request, reply) =>
+      guarded(reply, async () => {
+        const result = await need().pilot.registerLead(session(request), request.body);
+        return reply.code(result.duplicate ? 200 : 201).send(result);
+      }),
+  );
+  app.post<{ Params: { id: string } }>('/pilot/leads/:id/classify', async (request, reply) =>
+    guarded(reply, () => need().pilot.classify(session(request), request.params.id)),
+  );
+  app.post<{ Params: { id: string }; Body: { kind: MessageKind } }>(
+    '/pilot/leads/:id/messages',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['kind'],
+          additionalProperties: false,
+          properties: {
+            kind: {
+              type: 'string',
+              enum: ['first-contact', 'qualification', 'proposal', 'follow-up'],
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) =>
+      guarded(reply, async () =>
+        reply
+          .code(201)
+          .send(
+            await need().pilot.prepareMessage(
+              session(request),
+              request.params.id,
+              request.body.kind,
+            ),
+          ),
+      ),
+  );
+  app.post<{ Params: { id: string }; Body: { title: string; owner: PilotAgent; dueDate: string } }>(
+    '/pilot/leads/:id/actions',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['title', 'owner', 'dueDate'],
+          additionalProperties: false,
+          properties: {
+            title: { type: 'string', maxLength: 200 },
+            owner: { type: 'string', enum: ['carlos', 'lucas', 'fernanda', 'rafael'] },
+            dueDate: { type: 'string', maxLength: 10 },
+          },
+        },
+      },
+    },
+    async (request, reply) =>
+      guarded(reply, async () =>
+        reply
+          .code(201)
+          .send(await need().pilot.addAction(session(request), request.params.id, request.body)),
+      ),
+  );
+  app.post<{ Params: { id: string; actionId: string } }>(
+    '/pilot/leads/:id/actions/:actionId/complete',
+    async (request, reply) =>
+      guarded(reply, () =>
+        need().pilot.completeAction(session(request), request.params.id, request.params.actionId),
+      ),
   );
 
   app.post<{ Body: { wait?: boolean } | null }>('/executor/run-next', async (request, reply) =>

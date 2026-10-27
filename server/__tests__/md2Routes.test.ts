@@ -340,4 +340,125 @@ describe('MD2 protected routes (MD2_EXECUTOR_ENABLED)', () => {
       }),
     ).rejects.toMatchObject({ code: 'RUNTIME_DATA_ROOT_INSIDE_CHECKOUT' });
   });
+
+  describe('commercial pilot (internal only)', () => {
+    const hotLead = {
+      reference: 'clinica-sol-001',
+      company: 'Clínica Sol',
+      contactName: 'Marina',
+      role: 'Diretora comercial',
+      segment: 'saúde',
+      source: 'indicacao',
+      need: 'Organizar a captação de pacientes e reduzir faltas em consultas.',
+    };
+
+    it('registers leads idempotently and lets read-only operators only look', async () => {
+      await build();
+      const token = await login();
+      const reader = await login('otto-reader', READER_SECRET);
+      const created = await call('POST', '/pilot/leads', token, hotLead);
+      expect(created.statusCode).toBe(201);
+      const lead = created.json().lead;
+      expect(lead).toMatchObject({ company: 'Clínica Sol', stage: 'new', registeredBy: 'ana-ceo' });
+      const again = await call('POST', '/pilot/leads', token, hotLead);
+      expect(again.statusCode).toBe(200);
+      expect(again.json().lead.id).toBe(lead.id);
+      expect(
+        (await call('POST', '/pilot/leads', reader, { ...hotLead, reference: 'other' })).statusCode,
+      ).toBe(403);
+      expect((await call('GET', '/pilot/leads', reader)).json()).toHaveLength(1);
+      expect((await call('GET', '/pilot/leads', undefined)).statusCode).toBe(401);
+    });
+
+    it('refuses contact data and secrets in lead fields', async () => {
+      await build();
+      const token = await login();
+      for (const notes of ['marina@clinicasol.com.br', 'ligar para +55 11 98765-4321'])
+        expect(
+          (
+            await call('POST', '/pilot/leads', token, {
+              ...hotLead,
+              reference: 'sensitive-' + notes.length,
+              notes,
+            })
+          ).json(),
+        ).toEqual({ error: 'PILOT_SENSITIVE_DATA' });
+      expect((await call('GET', '/pilot/leads', token)).json()).toHaveLength(0);
+    });
+
+    it('classifies, prepares unsendable drafts and organizes internal actions', async () => {
+      await build();
+      const token = await login();
+      const hot = (await call('POST', '/pilot/leads', token, hotLead)).json().lead;
+      const cold = (
+        await call('POST', '/pilot/leads', token, {
+          reference: 'loja-x-002',
+          company: 'Loja X',
+          source: 'manual',
+        })
+      ).json().lead;
+      expect((await call('POST', `/pilot/leads/${hot.id}/classify`, token)).json()).toMatchObject({
+        stage: 'hot',
+        owner: 'rafael',
+        score: 7,
+      });
+      expect((await call('POST', `/pilot/leads/${cold.id}/classify`, token)).json()).toMatchObject({
+        stage: 'cold',
+        owner: 'lucas',
+      });
+
+      const draft = await call('POST', `/pilot/leads/${hot.id}/messages`, token, {
+        kind: 'proposal',
+      });
+      expect(draft.statusCode).toBe(201);
+      expect(draft.json()).toMatchObject({
+        kind: 'proposal',
+        author: 'rafael',
+        status: 'draft',
+        sendable: false,
+      });
+      expect(draft.json().text).toContain('Clínica Sol');
+      // There is no send endpoint at all.
+      expect(
+        (await call('POST', `/pilot/leads/${hot.id}/messages/${draft.json().id}/send`, token))
+          .statusCode,
+      ).toBe(404);
+
+      const action = await call('POST', `/pilot/leads/${hot.id}/actions`, token, {
+        title: 'Revisar minuta com o time comercial',
+        owner: 'carlos',
+        dueDate: '2026-11-03',
+      });
+      expect(action.statusCode).toBe(201);
+      expect(
+        (
+          await call('POST', `/pilot/leads/${hot.id}/actions`, token, {
+            title: 'x',
+            owner: 'mariana',
+            dueDate: '2026-11-03',
+          })
+        ).statusCode,
+      ).toBe(400);
+      expect(
+        (
+          await call('POST', `/pilot/leads/${hot.id}/actions`, token, {
+            title: 'x',
+            owner: 'lucas',
+            dueDate: 'amanhã',
+          })
+        ).statusCode,
+      ).toBe(400);
+      const done = await call(
+        'POST',
+        `/pilot/leads/${hot.id}/actions/${action.json().id}/complete`,
+        token,
+      );
+      expect(done.json().actions).toMatchObject([{ done: true, owner: 'carlos' }]);
+      const listed = (await call('GET', `/pilot/leads/${hot.id}`, token)).json();
+      expect(listed.messages).toHaveLength(1);
+      expect(
+        (await runtime.store.read())?.data.agents.every((agent) => agent.status === 'inactive'),
+      ).toBe(true);
+    });
+  });
 });

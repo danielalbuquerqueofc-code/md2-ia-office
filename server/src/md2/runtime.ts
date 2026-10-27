@@ -7,6 +7,7 @@ import { Md2Director } from './director.js';
 import { type ExecutionReport, Md2Executor, type Md2Worker } from './executor.js';
 import type { LimitBand, LimitsConfiguration, Reservation } from './limits.js';
 import { loadOperatorConfig, Md2OperatorAuth, type OperatorConfig } from './operatorAuth.js';
+import { Md2CommercialPilot } from './pilot.js';
 import { Md2Policy, type PolicyGrant } from './policy.js';
 import { Md2Queue } from './queue.js';
 import { enforce, Md2SecurityError } from './securityLedger.js';
@@ -104,6 +105,7 @@ export interface Md2Runtime {
   policy: Md2Policy;
   director: Md2Director;
   queue: Md2Queue;
+  pilot: Md2CommercialPilot;
   executor: Md2Executor | null;
   workerMode: Md2WorkerMode | 'custom';
   /** Background run state for the HTTP layer. */
@@ -171,6 +173,7 @@ export async function createMd2Runtime(config: Md2RuntimeConfig): Promise<Md2Run
     policy,
     director,
     queue,
+    pilot: new Md2CommercialPilot(store, { scope, auth }),
     executor: worker ? new Md2Executor(store, { scope, queue, auth, worker }) : null,
     workerMode: typeof config.worker === 'object' ? 'custom' : config.worker,
     run: { active: null, last: null, lastError: null },
