@@ -36,6 +36,8 @@ export interface QueueLease {
   ownerId: string;
   issuedAt: number;
   expiresAt: number;
+  /** Hard limit for heartbeats. Absent on leases written before 03C-02: those never renew. */
+  deadlineAt?: number;
 }
 interface QueueRecord {
   id: string;
@@ -59,7 +61,11 @@ export interface QueueItem extends QueueRecord {
   createdAt: string;
   updatedAt: string;
   history: { id: string; state: QueueState; attempts: number; createdAt: string }[];
+  /** Derived, never persisted: the lease whose not-started release is the latest event. */
+  releasedLease: QueueLease | null;
 }
+const LEGACY_LEASE_KEYS = 'attemptId,expiresAt,id,issuedAt,ownerId';
+const LEASE_KEYS = 'attemptId,deadlineAt,expiresAt,id,issuedAt,ownerId';
 const BOOT_ID = randomUUID();
 let queueTail: Promise<unknown> = Promise.resolve();
 const recoveryRoots = new Map<string, Md2Storage>();
@@ -100,10 +106,11 @@ function holding(item: QueueRecord): boolean {
   return item.state === 'reserved' || item.state === 'reconciliation_required';
 }
 function recordOf(item: QueueItem): QueueRecord {
-  const { createdAt, updatedAt, history, ...record } = item;
+  const { createdAt, updatedAt, history, releasedLease, ...record } = item;
   void createdAt;
   void updatedAt;
   void history;
+  void releasedLease;
   return record;
 }
 function event(record: QueueRecord): NonNullable<StorageChanges['events']>[number] {
@@ -192,7 +199,9 @@ function project(snapshot: StorageSnapshot): QueueItem[] {
     if (r.lease !== null)
       enforce(
         object(r.lease) &&
-          Object.keys(r.lease).length === 5 &&
+          [LEGACY_LEASE_KEYS, LEASE_KEYS].includes(Object.keys(r.lease).sort().join(',')) &&
+          (r.lease.deadlineAt === undefined ||
+            (integer(r.lease.deadlineAt) && r.lease.deadlineAt >= r.lease.expiresAt)) &&
           validId(r.lease.id) &&
           validId(r.lease.attemptId) &&
           validId(r.lease.ownerId) &&
@@ -218,7 +227,14 @@ function project(snapshot: StorageSnapshot): QueueItem[] {
       const transitions: Record<QueueState, readonly QueueState[]> = {
         queued: ['queued', 'blocked', 'reserved', 'cancelled', 'failed'],
         blocked: ['queued', 'blocked', 'reserved', 'cancelled', 'failed'],
-        reserved: ['queued', 'completed', 'failed', 'cancelled', 'reconciliation_required'],
+        reserved: [
+          'queued',
+          'reserved',
+          'completed',
+          'failed',
+          'cancelled',
+          'reconciliation_required',
+        ],
         reconciliation_required: [
           'queued',
           'completed',
@@ -233,11 +249,26 @@ function project(snapshot: StorageSnapshot): QueueItem[] {
       enforce(
         isDeepStrictEqual(immutable(previous), immutable(r)) &&
           transitions[previous.state].includes(r.state) &&
-          r.attempts === previous.attempts + (r.state === 'reserved' ? 1 : 0) &&
+          r.attempts ===
+            previous.attempts + (r.state === 'reserved' && previous.state !== 'reserved' ? 1 : 0) &&
           r.authorizationVersion >= previous.authorizationVersion,
         'QUEUE_INVALID_LEDGER',
       );
-      if (holding(previous) && r.lease)
+      if (previous.state === 'reserved' && r.state === 'reserved') {
+        // Renewal: only expiresAt may move forward, never past the original deadline.
+        const lease = previous.lease!;
+        enforce(
+          lease.deadlineAt !== undefined &&
+            r.lease !== null &&
+            r.lease.expiresAt > lease.expiresAt &&
+            r.lease.expiresAt <= lease.deadlineAt &&
+            isDeepStrictEqual(r, {
+              ...recordOf(previous),
+              lease: { ...lease, expiresAt: r.lease.expiresAt },
+            }),
+          'QUEUE_INVALID_LEDGER',
+        );
+      } else if (holding(previous) && r.lease)
         enforce(isDeepStrictEqual(r.lease, previous.lease), 'QUEUE_INVALID_LEDGER');
     }
     items.set(r.id, {
@@ -248,6 +279,7 @@ function project(snapshot: StorageSnapshot): QueueItem[] {
         ...(previous?.history ?? []),
         { id: entry.id, state: r.state, attempts: r.attempts, createdAt: entry.createdAt },
       ],
+      releasedLease: previous && holding(previous) && r.state === 'queued' ? previous.lease : null,
     });
   }
   return [...items.values()];
@@ -263,6 +295,7 @@ export class Md2Queue {
   private readonly ownerId: string;
   private readonly maxAttempts: number;
   private readonly leaseMs: number;
+  private readonly maxRunMs: number;
   private readonly allocation: Reservation;
   constructor(
     private readonly store: Md2Storage,
@@ -274,6 +307,8 @@ export class Md2Queue {
       allocation: Reservation;
       maxAttempts?: number;
       leaseMs?: number;
+      /** Hard deadline for one attempt, fixed in the lease at reservation (default 30 min). */
+      maxRunMs?: number;
       ownerId?: string;
       recoveryRoots?: readonly Md2Storage[];
     },
@@ -287,6 +322,7 @@ export class Md2Queue {
     this.scope = { clientId: options.scope.clientId, projectId: options.scope.projectId };
     this.maxAttempts = options.maxAttempts ?? 3;
     this.leaseMs = options.leaseMs ?? 60000;
+    this.maxRunMs = options.maxRunMs ?? Math.max(1800000, this.leaseMs);
     this.ownerId = options.ownerId ?? BOOT_ID;
     enforce(
       integer(this.maxAttempts) &&
@@ -295,6 +331,9 @@ export class Md2Queue {
         integer(this.leaseMs) &&
         this.leaseMs > 0 &&
         this.leaseMs <= 86400000 &&
+        integer(this.maxRunMs) &&
+        this.maxRunMs >= this.leaseMs &&
+        this.maxRunMs <= 86400000 &&
         validId(this.ownerId) &&
         redactMd2Text(this.ownerId) === this.ownerId &&
         allocation(options.allocation),
@@ -319,13 +358,13 @@ export class Md2Queue {
   }
   private async change(
     id: string,
-    update: (item: QueueItem) => QueueRecord | null,
+    update: (item: QueueItem, snapshot: StorageSnapshot) => QueueRecord | null,
     source = this.store,
   ): Promise<QueueItem> {
     for (let attempt = 0; attempt < 8; attempt++) {
       const snapshot = await readSecurityStore(source);
       const prior = this.item(snapshot, id);
-      const next = update(prior);
+      const next = update(prior, snapshot);
       if (!next) return prior;
       try {
         const saved = await source.commit({ events: [event(next)] }, snapshot.revision);
@@ -434,7 +473,18 @@ export class Md2Queue {
     const snapshot = await this.snapshot();
     return this.action(this.item(snapshot, id), snapshot);
   }
-  private action(item: QueueItem, snapshot: StorageSnapshot): PolicyAction {
+  /** The exact action authorized for the current reservation (read-only). */
+  async actionForReservation(id: string): Promise<PolicyAction> {
+    const snapshot = await this.snapshot();
+    const item = this.item(snapshot, id);
+    enforce(item.state === 'reserved' && item.lease !== null, 'QUEUE_NOT_RESERVED');
+    return this.action(item, snapshot, item.attempts);
+  }
+  private action(
+    item: QueueItem,
+    snapshot: StorageSnapshot,
+    attempt = item.attempts + 1,
+  ): PolicyAction {
     const task = snapshot.data.tasks.find((task) => task.id === item.id)!;
     let content: unknown;
     try {
@@ -453,7 +503,7 @@ export class Md2Queue {
       id:
         'authorization-' +
         createHash('sha256')
-          .update(JSON.stringify([item.id, item.attempts + 1, item.authorizationVersion]))
+          .update(JSON.stringify([item.id, attempt, item.authorizationVersion]))
           .digest('hex')
           .slice(0, 48),
       taskId: item.id,
@@ -637,6 +687,7 @@ export class Md2Queue {
                   ownerId: this.ownerId,
                   issuedAt: now,
                   expiresAt: now + this.leaseMs,
+                  deadlineAt: now + this.maxRunMs,
                 },
                 reason: null,
                 lastConsumption: null,
@@ -672,6 +723,33 @@ export class Md2Queue {
       }
       return null;
     });
+  }
+  /**
+   * Renews an active lease held by this owner. Never renews an expired, foreign,
+   * reconciled or legacy (deadline-less) lease, and never moves past deadlineAt.
+   */
+  heartbeat(id: string, leaseId: string, attemptId: string): Promise<QueueItem> {
+    return serial(() =>
+      this.change(id, (item, snapshot) => {
+        const lease = item.lease;
+        const now = Math.max(Date.now(), Date.parse(snapshot.updatedAt));
+        enforce(
+          item.state === 'reserved' &&
+            lease !== null &&
+            lease.id === leaseId &&
+            lease.attemptId === attemptId &&
+            lease.ownerId === this.ownerId &&
+            lease.issuedAt <= now &&
+            now < lease.expiresAt,
+          'QUEUE_LEASE_INVALID_OR_EXPIRED',
+        );
+        const deadline = lease.deadlineAt ?? lease.expiresAt;
+        enforce(lease.expiresAt < deadline, 'QUEUE_LEASE_DEADLINE_REACHED');
+        const expiresAt = Math.min(now + this.leaseMs, deadline);
+        if (expiresAt <= lease.expiresAt) return null;
+        return { ...recordOf(item), lease: { ...lease, expiresAt } };
+      }),
+    );
   }
   private block(id: string, reason: string): Promise<QueueItem> {
     return this.change(id, (item) =>
@@ -747,9 +825,27 @@ export class Md2Queue {
     const copied = structuredClone(consumption);
     const snapshot = await this.snapshot();
     const item = this.item(snapshot, id);
+    const release = outcome === 'queued' && !recovery;
     if (['completed', 'failed', 'cancelled'].includes(item.state) && item.lease?.id === leaseId) {
+      // A release that hit the attempt cap is persisted as failed/ATTEMPT_LIMIT_REACHED.
       enforce(
-        item.state === outcome && isDeepStrictEqual(item.lastConsumption, copied),
+        (release
+          ? item.state === 'failed' &&
+            item.reason === 'ATTEMPT_LIMIT_REACHED' &&
+            item.lease.ownerId === this.ownerId
+          : item.state === outcome && item.reason === null) &&
+          isDeepStrictEqual(item.lastConsumption, copied),
+        'QUEUE_SETTLEMENT_CONFLICT',
+      );
+      await this.limits.synchronize();
+      return item;
+    }
+    if (release && item.lease === null && item.releasedLease?.id === leaseId) {
+      // Repeated release: accepted only while that release is still the latest event.
+      enforce(
+        item.state === 'queued' &&
+          item.releasedLease.ownerId === this.ownerId &&
+          isDeepStrictEqual(item.lastConsumption, copied),
         'QUEUE_SETTLEMENT_CONFLICT',
       );
       await this.limits.synchronize();

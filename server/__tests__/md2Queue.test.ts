@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -10,9 +11,10 @@ import {
   Md2Director,
 } from '../src/md2/director.js';
 import { type LimitsConfiguration, Md2Limits } from '../src/md2/limits.js';
-import { Md2Policy, type PolicyGrant } from '../src/md2/policy.js';
-import { Md2Queue } from '../src/md2/queue.js';
+import { Md2Policy, type PolicyAction, type PolicyGrant } from '../src/md2/policy.js';
+import { Md2Queue, type QueueItem } from '../src/md2/queue.js';
 import { Md2Storage, type StorageScope } from '../src/md2/storage.js';
+import { workerInputFromReservation } from '../src/md2/worker.js';
 
 const scope = { clientId: 'queue-test-client', projectId: 'queue-test-project' };
 const zero = { maxAttempts: 0, maxTokens: 0, maxCostMicros: 0 };
@@ -105,6 +107,7 @@ describe('MD2 persistent distribution queue (no execution)', () => {
       limits?: LimitsConfiguration;
       maxAttempts?: number;
       leaseMs?: number;
+      maxRunMs?: number;
       ownerId?: string;
     } = {},
   ) {
@@ -118,6 +121,7 @@ describe('MD2 persistent distribution queue (no execution)', () => {
       allocation: { tokens: 10, costMicros: 10 },
       maxAttempts: options.maxAttempts,
       leaseMs: options.leaseMs,
+      maxRunMs: options.maxRunMs,
       ownerId: options.ownerId,
     });
   }
@@ -698,5 +702,240 @@ describe('MD2 persistent distribution queue (no execution)', () => {
       attempts: 0,
     });
     expect((await new Md2Limits(store, budgetConfig()).usage()).attempts).toBe(0);
+  });
+
+  describe('03C-02 lease renewal and release idempotency', () => {
+    function record(item: QueueItem): Record<string, unknown> {
+      const { createdAt, updatedAt, history, releasedLease, ...rest } = item;
+      void createdAt;
+      void updatedAt;
+      void history;
+      void releasedLease;
+      return rest;
+    }
+    async function forge(itemId: string, fields: Record<string, unknown>) {
+      const snapshot = (await store.read())!;
+      await store.commit(
+        {
+          events: [
+            {
+              id: 'queue-' + randomUUID(),
+              taskId: itemId,
+              type: 'status',
+              message: JSON.stringify({ namespace: 'md2.queue.v1', ...fields }),
+            },
+          ],
+        },
+        snapshot.revision,
+      );
+    }
+
+    it('renews only forward, persists each renewal and stops at the fixed deadline', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const q = queue({ leaseMs: 100, maxRunMs: 250 });
+      const item = await enqueued(q);
+      const reserved = (await q.reserveNext())!;
+      const { id, attemptId, issuedAt, deadlineAt } = reserved.lease!;
+      expect(deadlineAt).toBe(issuedAt + 250);
+      vi.setSystemTime(issuedAt + 50);
+      expect((await q.heartbeat(item.id, id, attemptId)).lease!.expiresAt).toBe(issuedAt + 150);
+      vi.setSystemTime(issuedAt + 140);
+      await q.heartbeat(item.id, id, attemptId);
+      vi.setSystemTime(issuedAt + 230);
+      const capped = await q.heartbeat(item.id, id, attemptId);
+      expect(capped.lease).toEqual({ ...reserved.lease, expiresAt: deadlineAt });
+      expect(capped.attempts).toBe(1);
+      vi.setSystemTime(issuedAt + 240);
+      await expect(q.heartbeat(item.id, id, attemptId)).rejects.toMatchObject({
+        code: 'QUEUE_LEASE_DEADLINE_REACHED',
+      });
+      const restarted = new Md2Storage({ root, scope });
+      const reloaded = await queue({
+        source: restarted,
+        director: makeDirector(restarted, scope),
+        policy: new Md2Policy(restarted, { scope, grants }),
+      }).get(item.id, session);
+      expect(reloaded?.lease).toEqual(capped.lease);
+      expect(reloaded?.history.map((entry) => entry.state)).toEqual([
+        'queued',
+        'reserved',
+        'reserved',
+        'reserved',
+        'reserved',
+      ]);
+      // A more permissive instance cannot move the stored deadline.
+      vi.setSystemTime(issuedAt + 245);
+      await expect(
+        queue({ leaseMs: 100, maxRunMs: 86400000 }).heartbeat(item.id, id, attemptId),
+      ).rejects.toMatchObject({ code: 'QUEUE_LEASE_DEADLINE_REACHED' });
+    });
+
+    it('never renews an expired, reconciled, foreign or mismatched lease and writes nothing', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const q = queue({ leaseMs: 100, ownerId: 'owner-a' });
+      const item = await enqueued(q);
+      const reserved = (await q.reserveNext())!;
+      const { id, attemptId } = reserved.lease!;
+      const before = fs.readFileSync(store.file);
+      for (const [leaseId, attempt] of [
+        ['wrong-lease', attemptId],
+        [id, 'wrong-attempt'],
+      ])
+        await expect(q.heartbeat(item.id, leaseId, attempt)).rejects.toMatchObject({
+          code: 'QUEUE_LEASE_INVALID_OR_EXPIRED',
+        });
+      await expect(
+        queue({ leaseMs: 100, ownerId: 'owner-b' }).heartbeat(item.id, id, attemptId),
+      ).rejects.toMatchObject({ code: 'QUEUE_LEASE_INVALID_OR_EXPIRED' });
+      vi.setSystemTime(reserved.lease!.expiresAt);
+      await expect(q.heartbeat(item.id, id, attemptId)).rejects.toMatchObject({
+        code: 'QUEUE_LEASE_INVALID_OR_EXPIRED',
+      });
+      expect(fs.readFileSync(store.file)).toEqual(before);
+      await q.recover();
+      expect((await q.get(item.id, session))?.state).toBe('reconciliation_required');
+      vi.setSystemTime(reserved.lease!.issuedAt + 10);
+      await expect(q.heartbeat(item.id, id, attemptId)).rejects.toMatchObject({
+        code: 'QUEUE_LEASE_INVALID_OR_EXPIRED',
+      });
+    });
+
+    it('serializes concurrent renewals and never renews after settlement', async () => {
+      const q = queue({ ownerId: 'owner-a' });
+      const peer = queue({ ownerId: 'owner-a' });
+      const item = await enqueued(q);
+      const reserved = (await q.reserveNext())!;
+      const { id, attemptId } = reserved.lease!;
+      const renewed = await Promise.all(
+        [q, peer, q, peer, q].map((instance) => instance.heartbeat(item.id, id, attemptId)),
+      );
+      const current = (await q.get(item.id, session))!;
+      expect(current.state).toBe('reserved');
+      expect(current.attempts).toBe(1);
+      expect(Math.max(...renewed.map((r) => r.lease!.expiresAt))).toBe(current.lease!.expiresAt);
+      const outcomes = await Promise.allSettled([
+        q.confirm(item.id, id, { tokens: 1, costMicros: 1 }),
+        peer.heartbeat(item.id, id, attemptId),
+      ]);
+      expect(outcomes[0].status).toBe('fulfilled');
+      expect((await q.get(item.id, session))?.state).toBe('completed');
+      await expect(q.heartbeat(item.id, id, attemptId)).rejects.toMatchObject({
+        code: 'QUEUE_LEASE_INVALID_OR_EXPIRED',
+      });
+    });
+
+    it('rejects forged renewals past the deadline or changing other fields', async () => {
+      const q = queue();
+      const item = await enqueued(q);
+      const reserved = (await q.reserveNext())!;
+      const lease = reserved.lease!;
+      await forge(item.id, {
+        ...record(reserved),
+        lease: { ...lease, expiresAt: lease.deadlineAt! + 1 },
+      });
+      await expect(q.get(item.id, session)).rejects.toMatchObject({ code: 'QUEUE_INVALID_LEDGER' });
+    });
+
+    it('rejects a forged renewal that also alters the attempt count', async () => {
+      const q = queue();
+      const item = await enqueued(q);
+      const reserved = (await q.reserveNext())!;
+      await forge(item.id, {
+        ...record(reserved),
+        attempts: 2,
+        lease: { ...reserved.lease!, expiresAt: reserved.lease!.expiresAt + 1 },
+      });
+      await expect(q.get(item.id, session)).rejects.toMatchObject({ code: 'QUEUE_INVALID_LEDGER' });
+    });
+
+    it('accepts legacy leases without a deadline and never renews them', async () => {
+      const q = queue({ ownerId: 'legacy-owner' });
+      const item = await enqueued(q);
+      const now = Date.now();
+      await forge(item.id, {
+        ...record(item),
+        state: 'reserved',
+        attempts: 1,
+        lease: {
+          id: 'legacy-lease',
+          attemptId: 'legacy-attempt',
+          ownerId: 'legacy-owner',
+          issuedAt: now,
+          expiresAt: now + 3600000,
+        },
+      });
+      const legacy = (await q.get(item.id, session))!;
+      expect(legacy.state).toBe('reserved');
+      expect(legacy.lease?.deadlineAt).toBeUndefined();
+      await expect(q.heartbeat(item.id, 'legacy-lease', 'legacy-attempt')).rejects.toMatchObject({
+        code: 'QUEUE_LEASE_DEADLINE_REACHED',
+      });
+    });
+
+    it('builds the worker input from the exact reserved action', async () => {
+      const q = queue();
+      const item = await enqueued(q);
+      await expect(q.actionForReservation(item.id)).rejects.toMatchObject({
+        code: 'QUEUE_NOT_RESERVED',
+      });
+      const reserved = (await q.reserveNext())!;
+      const input = workerInputFromReservation(reserved, await q.actionForReservation(item.id));
+      expect(input).toMatchObject({
+        workId: item.id,
+        leaseId: reserved.lease!.id,
+        attemptId: reserved.lease!.attemptId,
+        agentId: 'andre',
+        kind: 'internal.draft',
+        deadlineAt: reserved.lease!.deadlineAt,
+        content: { title: 'Rascunho de código' },
+      });
+      expect(input.authorization.actionId).not.toBe((await q.actionForNextAttempt(item.id)).id);
+      expect(() => workerInputFromReservation(item, {} as PolicyAction)).toThrow();
+    });
+
+    it('acknowledges a repeated release after a lost acknowledgement without a new event', async () => {
+      const q = queue();
+      const item = await enqueued(q);
+      const reserved = (await q.reserveNext())!;
+      const commit = store.commit.bind(store);
+      vi.spyOn(store, 'commit').mockImplementationOnce(async (changes, revision) => {
+        await commit(changes, revision);
+        throw new Error('Simulated lost release acknowledgement');
+      });
+      await expect(q.release(item.id, reserved.lease!.id, 'not-started')).rejects.toThrow(
+        'Simulated lost release',
+      );
+      vi.mocked(store.commit).mockImplementation(commit);
+      const bytes = fs.readFileSync(store.file);
+      const again = await q.release(item.id, reserved.lease!.id, 'not-started');
+      expect(again).toMatchObject({ state: 'queued', attempts: 1, lease: null });
+      expect(again.releasedLease?.id).toBe(reserved.lease!.id);
+      expect(fs.readFileSync(store.file)).toEqual(bytes);
+      await expect(q.release(item.id, 'other-lease', 'not-started')).rejects.toThrow();
+      await expect(
+        queue({ ownerId: 'someone-else' }).release(item.id, reserved.lease!.id, 'not-started'),
+      ).rejects.toMatchObject({ code: 'QUEUE_SETTLEMENT_CONFLICT' });
+      await expect(
+        q.confirm(item.id, reserved.lease!.id, { tokens: 0, costMicros: 0 }),
+      ).rejects.toThrow();
+      // The global slot was synchronized: the next attempt can be reserved.
+      const next = (await q.reserveNext())!;
+      expect(next.attempts).toBe(2);
+      await expect(q.release(item.id, reserved.lease!.id, 'not-started')).rejects.toThrow();
+    });
+
+    it('acknowledges a repeated release that reached the attempt cap', async () => {
+      const q = queue({ maxAttempts: 1 });
+      const item = await enqueued(q);
+      const reserved = (await q.reserveNext())!;
+      const first = await q.release(item.id, reserved.lease!.id, 'not-started');
+      expect(first).toMatchObject({ state: 'failed', reason: 'ATTEMPT_LIMIT_REACHED' });
+      const bytes = fs.readFileSync(store.file);
+      expect(await q.release(item.id, reserved.lease!.id, 'not-started')).toEqual(first);
+      expect(fs.readFileSync(store.file)).toEqual(bytes);
+      await expect(
+        q.fail(item.id, reserved.lease!.id, { tokens: 0, costMicros: 0 }),
+      ).rejects.toMatchObject({ code: 'QUEUE_SETTLEMENT_CONFLICT' });
+    });
   });
 });
