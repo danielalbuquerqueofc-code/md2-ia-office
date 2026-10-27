@@ -1,4 +1,5 @@
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, execFile, spawn } from 'node:child_process';
+import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
 type RpcResult = {
@@ -8,6 +9,47 @@ type RpcResult = {
 };
 
 export type RpcMessage = { id?: number | string; method: string; params?: Record<string, unknown> };
+
+const STRIPPED_ENV = [
+  'CODEX_APP_TOOLS_PIPE_PATH',
+  'CODEX_INTERNAL_ORIGINATOR_OVERRIDE',
+  'CODEX_THREAD_ID',
+  'CODEX_SESSION_ID',
+  'CODEX_TOOL_CALL_ID',
+];
+
+/**
+ * Ends a process and all of its descendants. Windows: taskkill /T /F from System32 (never a
+ * PATH lookup). POSIX: the child leads its own process group, so the whole group is signalled.
+ */
+export function killProcessTree(pid: number | undefined): Promise<void> {
+  if (!pid || !Number.isSafeInteger(pid) || pid <= 0) return Promise.resolve();
+  if (process.platform === 'win32') {
+    const taskkill = path.join(
+      process.env['SystemRoot'] ?? 'C:\\Windows',
+      'System32',
+      'taskkill.exe',
+    );
+    return new Promise((resolve) =>
+      execFile(
+        taskkill,
+        ['/PID', String(pid), '/T', '/F'],
+        { windowsHide: true, timeout: 10000 },
+        () => resolve(),
+      ),
+    );
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  }
+  return Promise.resolve();
+}
 
 /** Private stdio transport. No HTTP token or server credentials are passed to Codex. */
 export class CodexClient {
@@ -22,6 +64,7 @@ export class CodexClient {
     }
   >();
   private closed = false;
+  private exited: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly options: {
@@ -31,8 +74,17 @@ export class CodexClient {
       onApproval: (message: RpcMessage) => Promise<Record<string, unknown>>;
       onExit: (error: Error) => void;
       args?: string[];
+      /** Per-request timeout (default 60 s). */
+      requestTimeoutMs?: number;
+      /** Extra environment for the child; values are never logged. */
+      env?: Record<string, string>;
     },
   ) {}
+
+  /** PID of the child, for the executor journal and tree termination. */
+  get pid(): number | undefined {
+    return this.child?.pid;
+  }
 
   start(): void {
     this.child = spawn(
@@ -42,30 +94,28 @@ export class CodexClient {
         cwd: this.options.cwd,
         shell: false,
         windowsHide: true,
+        // POSIX: own process group so the whole tree can be ended on close.
+        detached: process.platform !== 'win32',
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([name]) =>
-              ![
-                'CODEX_APP_TOOLS_PIPE_PATH',
-                'CODEX_INTERNAL_ORIGINATOR_OVERRIDE',
-                'CODEX_THREAD_ID',
-                'CODEX_SESSION_ID',
-                'CODEX_TOOL_CALL_ID',
-              ].includes(name),
+        env: {
+          ...Object.fromEntries(
+            Object.entries(process.env).filter(([name]) => !STRIPPED_ENV.includes(name)),
           ),
-        ),
+          ...this.options.env,
+        },
       },
     );
-    const reader = createInterface({ input: this.child.stdout });
+    const child = this.child;
+    this.exited = new Promise((resolve) => child.once('exit', () => resolve()));
+    const reader = createInterface({ input: child.stdout });
     reader.on('line', (line) => {
       void this.receive(line);
     });
     // Protocol data only comes from stdout; drain diagnostics without exposing credentials.
-    this.child.stderr.resume();
-    this.child.stdin.on('error', (error) => this.fail(error));
-    this.child.on('error', (error) => this.fail(error));
-    this.child.on('exit', (code) => {
+    child.stderr.resume();
+    child.stdin.on('error', (error) => this.fail(error));
+    child.on('error', (error) => this.fail(error));
+    child.on('exit', (code) => {
       reader.close();
       if (!this.closed) this.fail(new Error(`Codex encerrou a conexão (${code}).`));
     });
@@ -78,7 +128,7 @@ export class CodexClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Tempo esgotado: ${method}`));
-      }, 60000);
+      }, this.options.requestTimeoutMs ?? 60000);
       this.pending.set(id, { resolve, reject, timer });
       this.write({ id, method, params });
     });
@@ -92,7 +142,20 @@ export class CodexClient {
     if (this.closed) return;
     this.closed = true;
     this.rejectPending(new Error('Conexão Codex encerrada.'));
-    this.child?.kill();
+    const child = this.child;
+    const alive = () => !!child && child.exitCode === null && child.signalCode === null;
+    if (alive())
+      // Tree first: on Windows, taskkill /T needs the parent alive to find descendants.
+      void killProcessTree(child!.pid).finally(() => {
+        if (alive()) child!.kill();
+      });
+  }
+
+  /** Closes and waits until the child (and, through the tree kill, its descendants) exited. */
+  async terminate(timeoutMs = 10000): Promise<void> {
+    this.close();
+    if (!this.child) return;
+    await Promise.race([this.exited, new Promise((resolve) => setTimeout(resolve, timeoutMs))]);
   }
 
   private rejectPending(error: Error): void {

@@ -90,3 +90,27 @@ Tentativas que possam ter começado **nunca** são repetidas automaticamente.
 - Um único processo escritor; sem coordenação entre processos.
 - O worker simulado não acessa rede, arquivos nem o repositório. Diretório isolado por tentativa,
   sandbox e encerramento de processos ficam para 03C-05.
+
+## Worker Codex (03C-05)
+
+`createCodexWorker` (`server/src/md2/codexWorker.ts`) implementa o contrato com o app-server do
+Codex. Criá-lo não inicia nada; **a primeira execução real exige autorização separada**.
+
+- Sandbox `read-only` e `approvalPolicy: never` no `thread/start` e nos argumentos (`-c`);
+  servidores MCP desligados. Todo pedido de escalonamento do agente é recusado (`decline`).
+- Um diretório novo por tentativa em `workspaceRoot/<hash do escopo>/<attemptId>`. A raiz precisa
+  ser absoluta e não pode conter nem estar dentro do checkout do servidor; um diretório existente
+  nunca é reutilizado.
+- `CodexClient` agora expõe `pid`, aceita timeout por requisição e encerra a **árvore** de
+  processos (Windows: `taskkill /T /F` pelo caminho do System32, antes de matar o pai; POSIX:
+  grupo de processos). `terminate()` espera a saída.
+- Mapeamento: `turn/completed` → `completed`/`failed`; saída do processo antes do `turn/start` →
+  `not-started`; depois → `unknown/PROCESS_EXITED`; cancelamento → `cancelled`; prazo ou lease
+  perdido → `unknown`. Tokens vêm de notificações `*tokenUsage*`; custo só com preço configurado
+  (`microsPerToken`), senão `null` (bloqueia o projeto até reconciliar).
+- Saída redigida e limitada antes de voltar ao executor.
+
+Limites: a aplicação efetiva do sandbox depende da versão do Codex e do sistema (no Windows o
+sandbox do Codex pode não isolar como em Linux/macOS) — validar na primeira execução autorizada.
+Os nomes de notificação de consumo do app-server podem mudar entre versões. Os testes usam um
+app-server simulado em Node (`server/__tests__/fixtures/fakeCodexAppServer.cjs`).
