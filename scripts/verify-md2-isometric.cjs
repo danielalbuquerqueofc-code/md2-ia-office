@@ -51,7 +51,7 @@ async function verify() {
     await canvas.waitFor();
     await page.waitForLoadState('networkidle');
     assert.equal(await page.locator('[data-workstation]').count(), 21);
-    assert.equal(await page.locator('[data-character-kind=planned]').count(), 22);
+    assert.equal(await page.locator('[data-character-kind=planned]').count(), 21);
     assert.equal(await page.locator('[data-character-kind=session]').count(), 0);
     assert.equal(await page.locator('[data-room]').count(), 9);
     assert.equal(

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   clearHooksAnswer,
@@ -18,22 +18,24 @@ import {
   writeConfig,
 } from '../src/configPersistence.js';
 
+// HOME does not control os.homedir() on Windows. Isolate the filesystem API
+// itself so these tests never read/write the operator's real configuration.
+const homeFixture = vi.hoisted(() => ({ path: undefined as string | undefined }));
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('os')>();
+  return { ...actual, homedir: () => homeFixture.path ?? actual.homedir() };
+});
+
 describe('configPersistence: areas', () => {
   let tempHome: string;
-  let originalHome: string | undefined;
 
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-config-test-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = tempHome;
+    homeFixture.path = tempHome;
   });
 
   afterEach(() => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    homeFixture.path = undefined;
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 

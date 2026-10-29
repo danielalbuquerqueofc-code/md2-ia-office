@@ -296,21 +296,27 @@ function App() {
   // pixel→tile geometry — the handlers still own undo/dirty/rebuild; for specs
   // that drive the real canvas gesture instead, getTileCenter projects a tile
   // to canvas CSS pixels with the renderer's own zoom + pan. Guarded on isE2E.
+  const {
+    handleEditorTileAction: editorTileAction,
+    handleEditorEraseAction: editorEraseAction,
+    handleDrop: editorDrop,
+    zoom: editorZoom,
+  } = editor;
   useEffect(() => {
     if (!isE2E || typeof window === 'undefined') return;
     const hooks = (window.__pixelAgentsTestHooks ??= {});
-    hooks.editorTileAction = (col, row) => editor.handleEditorTileAction(col, row);
-    hooks.editorEraseAction = (col, row) => editor.handleEditorEraseAction(col, row);
+    hooks.editorTileAction = editorTileAction;
+    hooks.editorEraseAction = editorEraseAction;
     hooks.editorDrop = (uid, col, row, duplicate = false) =>
-      editor.handleDrop(uid, col, row, { duplicate });
+      editorDrop(uid, col, row, { duplicate });
     hooks.getTileCenter = (col, row) => {
       const canvas = document.querySelector(`[data-testid="${OFFICE_CANVAS_TEST_ID}"]`);
       if (!canvas) return null;
       const projection = overlayProjection(
         getOfficeState().getLayout(),
         canvas.getBoundingClientRect(),
-        editor.zoom,
-        editor.panRef.current,
+        editorZoom,
+        officePanRef.current,
         window.devicePixelRatio || 1,
       );
       return {
@@ -320,11 +326,11 @@ function App() {
     };
     hooks.getShowAreas = () => effectiveShowAreas;
   }, [
-    editor.handleEditorTileAction,
-    editor.handleEditorEraseAction,
-    editor.handleDrop,
-    editor.zoom,
-    editor.panRef,
+    editorTileAction,
+    editorEraseAction,
+    editorDrop,
+    editorZoom,
+    officePanRef,
     effectiveShowAreas,
   ]);
 

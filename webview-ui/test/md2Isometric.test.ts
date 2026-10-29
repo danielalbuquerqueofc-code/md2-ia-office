@@ -6,6 +6,7 @@ import {
   ISOMETRIC_ROOMS,
   liveProgrammer,
   projectOffice,
+  projectReferenceOffice,
   workstationPositions,
 } from '../src/components/md2Isometric.js';
 import { Md2IsometricOffice } from '../src/components/Md2IsometricOffice.js';
@@ -21,7 +22,7 @@ describe('MD2 isometric scene foundation', () => {
         }),
       );
       expect(html.match(/data-character-kind="session"/g)).toHaveLength(1);
-      expect(html.match(/data-character-kind="planned"/g)).toHaveLength(21);
+      expect(html.match(/data-character-kind="planned"/g)).toHaveLength(20);
       if (status === 'approval') {
         expect(html).toContain('iso-person-await');
         expect(html).not.toContain('class="iso-typing"');
@@ -36,6 +37,12 @@ describe('MD2 isometric scene foundation', () => {
     expect(x.x * y.x + x.y * y.y).toBeCloseTo(-0.5);
     expect(projectOffice(0, 0, 10)).toEqual({ x: 0, y: -10 });
   });
+  it('keeps the reference camera front-facing with upright height and shallow depth', () => {
+    expect(projectReferenceOffice(300, 0)).toEqual({ x: 300, y: 0 });
+    expect(projectReferenceOffice(0, 180).x).toBeCloseTo(-25.2);
+    expect(projectReferenceOffice(0, 180).y).toBeCloseTo(117);
+    expect(projectReferenceOffice(0, 0, 92)).toEqual({ x: 0, y: -92 });
+  });
   it('preserves seven departments and exactly 20 planned workstations', () => {
     expect(ISOMETRIC_ROOMS).toHaveLength(7);
     expect(new Set(ISOMETRIC_ROOMS.map((room) => room.id)).size).toBe(7);
@@ -45,8 +52,8 @@ describe('MD2 isometric scene foundation', () => {
       expect(new Set(seats.map((seat) => `${seat.x}:${seat.y}`)).size).toBe(room.positions);
       for (const seat of seats) {
         expect(seat.x).toBeGreaterThan(29);
-        expect(seat.x + 29).toBeLessThan(218);
-        expect(seat.y + 17).toBeLessThan(108);
+        expect(seat.x + 40).toBeLessThan(300);
+        expect(seat.y + 22).toBeLessThan(180);
       }
     }
   });

@@ -5,14 +5,19 @@ export function projectOffice(x: number, y: number, z = 0) {
   return { x: ((x - y) * Math.sqrt(3)) / 2, y: (x + y) / 2 - z };
 }
 
+/** The reference uses a front cutaway camera, with shallow depth and upright walls. */
+export function projectReferenceOffice(x: number, y: number, z = 0) {
+  return { x: x - y * 0.14, y: y * 0.65 - z };
+}
+
 const placements: Record<string, [number, number]> = {
-  commercial: [135, 108],
-  marketing: [135, 326],
-  operations: [135, 544],
-  strategy: [885, 108],
-  finance: [885, 326],
-  technology: [885, 544],
-  support: [510, 376],
+  commercial: [38, 95],
+  marketing: [38, 290],
+  operations: [38, 485],
+  strategy: [790, 95],
+  finance: [790, 290],
+  technology: [790, 485],
+  support: [405, 330],
 };
 export const ISOMETRIC_ROOMS = MD2_DEPARTMENTS.map((department) => ({
   ...department,
@@ -22,8 +27,8 @@ export const ISOMETRIC_ROOMS = MD2_DEPARTMENTS.map((department) => ({
 
 export function workstationPositions(count: number) {
   return Array.from({ length: count }, (_, index) => ({
-    x: count === 1 ? 95 : 47 + (index % 2) * 100,
-    y: count <= 2 ? 53 : 28 + Math.floor(index / 2) * 57,
+    x: count === 1 ? 145 : count === 3 ? 48 + index * 95 : 70 + (index % 2) * 140,
+    y: count === 1 ? 100 : count < 4 ? 120 : 60 + Math.floor(index / 2) * 80,
   }));
 }
 

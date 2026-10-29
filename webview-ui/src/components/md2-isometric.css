@@ -7,9 +7,13 @@ html.md2-dashboard {
   --iso-paper: #e6e2d1;
   --iso-amber: #e7ad3e;
   --iso-green: #35c989;
-  --iso-floor: #a6957e;
-  --iso-wall-back: #595d61;
-  --iso-wall-side: #3b444c;
+  --iso-floor: #c7b496;
+  --iso-wall-back: #796d5e;
+  --iso-wall-side: #554e43;
+  --iso-chair: #182535;
+  --iso-mortar: #988776;
+  --iso-code: #8ca5e1;
+  --iso-base: #4a4034;
   --iso-wall-edge: #172435;
   --iso-window: #1b405a;
   --iso-window-edge: #758795;
@@ -56,12 +60,12 @@ html.md2-dashboard .md2-isometric-office {
   fill: var(--iso-paper);
 }
 .iso-room-title {
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.25px;
 }
 .iso-count {
-  font-size: 9px;
+  font-size: 11px;
 }
 .iso-status-symbol {
   font-size: 11px;
@@ -84,7 +88,7 @@ html.md2-dashboard .md2-isometric-office {
   fill: #2e9bff !important;
 }
 .iso-person-planned {
-  opacity: 0.78;
+  opacity: 0.92;
   animation: iso-idle 3.6s ease-in-out infinite alternate;
 }
 .iso-person-live {
