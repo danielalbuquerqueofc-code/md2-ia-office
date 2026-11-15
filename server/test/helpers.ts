@@ -21,6 +21,13 @@ export class FakeRuntime implements AgentRuntime {
   agentCalls: RunAgentOptions[] = [];
   structuredCalls: RunStructuredOptions[] = [];
 
+  sandboxActive = false;
+  peek() {
+    return { ready: this.ready, detail: 'dublê de teste' };
+  }
+  sandbox() {
+    return { active: this.sandboxActive, mode: 'auto', detail: 'dublê de teste' };
+  }
   async status() {
     return this.ready ? { ready: true, detail: 'dublê de teste' } : { ready: false, detail: 'Runtime indisponível (teste).' };
   }
@@ -46,10 +53,10 @@ export function plan(tarefas: Array<Partial<Plan['tarefas'][number]> & { chave: 
 
 export function setup(env: Record<string, string> = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'md2-test-'));
-  const config = loadConfig({ MD2_DATA_DIR: dataDir, MD2_TASK_MAX_ATTEMPTS: '2', ...env }, ROOT);
+  const config = loadConfig({ MD2_DATA_DIR: dataDir, MD2_BACKUP_DIR: `${dataDir}-backups`, MD2_TASK_MAX_ATTEMPTS: '2', ...env }, ROOT);
   const runtime = new FakeRuntime();
   const { services, engine } = bootstrap(config, runtime);
-  const cleanup = () => { services.db.close(); fs.rmSync(dataDir, { recursive: true, force: true }); };
+  const cleanup = () => { services.db.close(); fs.rmSync(dataDir, { recursive: true, force: true }); fs.rmSync(`${dataDir}-backups`, { recursive: true, force: true }); };
   const exec = (id: string) => services.db.get<{ status: string; error: string | null; cost_usd: number; summary: string | null }>('SELECT * FROM executions WHERE id = :id', { id })!;
   const tasks = (id: string) => services.db.all<{ key: string; status: string; attempt: number; error: string | null; instructions: string }>('SELECT * FROM tasks WHERE execution_id = :id ORDER BY rowid', { id });
   const events = (id: string) => services.db.all<{ type: string; message: string }>('SELECT type, message FROM events WHERE execution_id = :id ORDER BY id', { id });

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import http from 'node:http';
 import { createApp } from '../src/http/app.js';
 import { plan, setup } from './helpers.js';
 
@@ -17,6 +18,14 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterAll(() => { server.close(); t.cleanup(); });
+
+/** Requisição crua para controlar Host/Origin (fetch não permite alterar Host). */
+const raw = (p: string, headers: Record<string, string>, method = 'GET') => new Promise<number>((resolve, reject) => {
+  const u = new URL(base + p);
+  const req = http.request({ host: u.hostname, port: u.port, path: p, method, headers }, (res) => { res.resume(); resolve(res.statusCode!); });
+  req.on('error', reject);
+  req.end();
+});
 
 describe('API HTTP', () => {
   it('exige autenticação em API e arquivos', async () => {
@@ -111,6 +120,40 @@ describe('API HTTP', () => {
     expect((await (await call('/api/deliverables')).json())[0].status).toBe('aprovado');
     const audit = await (await call('/api/audit')).json();
     expect(audit.map((a: { action: string }) => a.action)).toEqual(expect.arrayContaining(['login', 'login_falhou', 'upload', 'mensagem', 'entregavel_aprovar']));
+  });
+
+  it('bloqueia DNS rebinding (Host estranho) e origem cruzada', async () => {
+    expect(await raw('/api/health', { host: 'atacante.com' })).toBe(421);
+    expect(await raw('/api/agents', { host: 'atacante.com:4310', cookie })).toBe(421);
+    expect(await raw('/api/health', { host: 'localhost:4310' })).toBe(200);
+    expect(await raw('/api/logout', { host: '127.0.0.1', origin: 'https://atacante.com', 'x-md2': '1' }, 'POST')).toBe(403);
+    expect(await raw('/%E0%A4%A', { host: '127.0.0.1' })).toBe(400);
+  });
+
+  it('health público é mínimo; detalhes, custos e backups exigem login', async () => {
+    const pub = await (await fetch(base + '/api/health')).json();
+    expect(Object.keys(pub).sort()).toEqual(['ok', 'status']);
+    expect((await fetch(base + '/api/health/details')).status).toBe(401);
+    expect((await fetch(base + '/api/costs')).status).toBe(401);
+    expect((await fetch(base + '/api/backups', { method: 'POST', headers: { 'x-md2': '1' } })).status).toBe(401);
+    const det = await (await call('/api/health/details')).json();
+    expect(det.checks.banco.ok).toBe(true);
+    expect(det.checks).toHaveProperty('isolamento');
+    const costs = await (await call('/api/costs')).json();
+    expect(costs.limits).toEqual({ task: 5, execution: 15, day: 60 });
+    expect(Array.isArray(costs.byAgent)).toBe(true);
+  });
+
+  it('cria, lista e verifica backup pela API', async () => {
+    const r = await call('/api/backups', { method: 'POST', headers: { 'x-md2': '1' } });
+    expect(r.status).toBe(200);
+    const snap = await r.json();
+    expect(snap.verified).toBe(true);
+    const list = await (await call('/api/backups')).json();
+    expect(list.snapshots[0].name).toBe(snap.name);
+    const v = await (await call(`/api/backups/${snap.name}/verify`, { method: 'POST', headers: { 'x-md2': '1' } })).json();
+    expect(v.ok).toBe(true);
+    expect((await (await call('/api/audit')).json()).some((a: { action: string }) => a.action === 'backup_manual')).toBe(true);
   });
 
   it('rejeita entradas inválidas', async () => {
