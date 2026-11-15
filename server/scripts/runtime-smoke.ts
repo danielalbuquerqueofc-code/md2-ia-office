@@ -12,7 +12,7 @@ import { ClaudeAgentRuntime } from '../src/runtime/claudeRuntime.js';
 const [text, ...files] = process.argv.slice(2);
 if (!text) throw new Error('Informe o pedido.');
 const config = loadConfig({ MD2_DATA_DIR: './data-smoke', MD2_MAX_COST_USD_PER_EXECUTION: '6', ...process.env });
-const { services, engine } = bootstrap(config, new ClaudeAgentRuntime());
+const { services, engine } = bootstrap(config, new ClaudeAgentRuntime(config));
 const t0 = Date.now();
 services.bus.subscribe((e) => console.log(`[${((Date.now() - t0) / 1000).toFixed(0).padStart(4)}s] ${e.type.padEnd(10)} ${e.agent_id ? `<${e.agent_id}> ` : ''}${e.message.replace(/\s+/g, ' ').slice(0, 220)}`));
 

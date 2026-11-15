@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { BackupService } from './backup.js';
 import type { Config } from './config.js';
 import { Db } from './db.js';
 import { EventBus } from './events.js';
@@ -22,6 +23,7 @@ export function bootstrap(config: Config, runtime: AgentRuntime) {
     skills: new SkillRegistry(config.rootDir),
     tools: new ToolRegistry(config),
     deliverables: new Deliverables(db, config.dataDir),
+    backups: new BackupService(db, config.dataDir, config.backupDir, config.backupKeep),
   };
   return { services, engine: new Engine(services) };
 }

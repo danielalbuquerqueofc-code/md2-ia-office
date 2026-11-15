@@ -44,3 +44,4 @@ playwright-report/
 # MD2 IA Office — dados de runtime (banco, workspaces, uploads, entregáveis)
 /data/
 /data-*/
+/backups/
