@@ -23,6 +23,9 @@ export interface Config {
   maxCostPerDay: number;
   maxCostPerTask: number;
   maxRecoveries: number;
+  /** Limite de uso da conta Claude: intervalo entre verificações e espera máxima antes de desistir. */
+  limitRetryMs: number;
+  limitMaxWaitMs: number;
   authorizedDirs: string[];
   enablePlaywrightMcp: boolean;
   /** auto = usa o sandbox de SO do SDK quando suportado; required = recusa executar sem; off = desativado (não recomendado). */
@@ -71,6 +74,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, rootDir = proce
     enablePlaywrightMcp: env.MD2_ENABLE_PLAYWRIGHT_MCP === '1',
     maxCostPerTask: num(env.MD2_MAX_COST_USD_PER_TASK, 5),
     maxRecoveries: num(env.MD2_MAX_RECOVERIES, 2),
+    limitRetryMs: num(env.MD2_LIMIT_RETRY_MIN, 10) * 60_000,
+    limitMaxWaitMs: num(env.MD2_LIMIT_MAX_WAIT_HOURS, 6) * 3_600_000,
     agentSandbox: sandbox as Config['agentSandbox'],
     allowedHosts: (env.MD2_ALLOWED_HOSTS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
     cookieSecure: env.MD2_COOKIE_SECURE === '1',

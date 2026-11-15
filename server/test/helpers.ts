@@ -28,8 +28,11 @@ export class FakeRuntime implements AgentRuntime {
   sandbox() {
     return { active: this.sandboxActive, mode: 'auto', detail: 'dublê de teste' };
   }
+  accountLimit = false;
+  statusCalls = 0;
   async status() {
-    return this.ready ? { ready: true, detail: 'dublê de teste' } : { ready: false, detail: 'Runtime indisponível (teste).' };
+    this.statusCalls++;
+    return this.ready ? { ready: true, detail: 'dublê de teste' } : { ready: false, detail: 'Runtime indisponível (teste).', accountLimit: this.accountLimit };
   }
   async runStructured<T>(o: RunStructuredOptions) {
     this.structuredCalls.push(o);

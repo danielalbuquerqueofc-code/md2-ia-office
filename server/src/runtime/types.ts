@@ -1,4 +1,7 @@
-export interface RuntimeStatus { ready: boolean; detail: string; checkedAt?: string }
+export interface RuntimeStatus { ready: boolean; detail: string; checkedAt?: string; accountLimit?: boolean }
+
+/** Erros que indicam limite de uso/crédito da conta Claude (não é falha da tarefa: basta esperar). */
+export const isAccountLimit = (text: string) => /hit your .{0,30}limit|usage limit|rate.?limit|credit balance is too low|limit reached|overloaded/i.test(text);
 
 export interface AgentActivity {
   kind: 'texto' | 'ferramenta' | 'sessao' | 'bloqueio';
@@ -56,7 +59,7 @@ export interface AgentRuntime {
 }
 
 export class RuntimeError extends Error {
-  constructor(message: string, readonly retryable = true, readonly costUsd = 0, readonly usage?: Usage) {
+  constructor(message: string, readonly retryable = true, readonly costUsd = 0, readonly usage?: Usage, readonly accountLimit = false) {
     super(message);
   }
 }

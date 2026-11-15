@@ -140,3 +140,47 @@ describe('entradas e duplicidade', () => {
     expect(t.services.deliverables.list()).toHaveLength(0);
   });
 });
+
+describe('limite de uso da conta Claude', () => {
+  const limit = () => new RuntimeError("Limite de uso da conta Claude atingido (You've hit your 5-hour limit).", true, 0, undefined, true);
+
+  it('pausa sem gastar tentativas e retoma sozinho quando a conta volta', async () => {
+    t.cleanup();
+    t = setup({ MD2_LIMIT_RETRY_MIN: '0.0005', MD2_TASK_MAX_ATTEMPTS: '1' });
+    t.runtime.plans.push(plan([{ chave: 'a', agente: 'pedro' }, { chave: 'b', agente: 'bruno' }]));
+    let blocked = 3;
+    t.runtime.agentImpl = async () => { if (blocked-- > 0) throw limit(); return { text: 'ok', costUsd: 0.01 }; };
+    const { executionId } = t.engine.submit({ text: 'x' });
+    await t.engine.whenIdle();
+    expect(t.tasks(executionId).map((x) => [x.status, x.attempt])).toEqual([['concluida', 1], ['concluida', 1]]);
+    expect(t.exec(executionId).status).toBe('concluido');
+    const msgs = t.events(executionId).map((e) => e.message);
+    expect(msgs.some((m) => /pausou a execução/.test(m))).toBe(true);
+    expect(msgs.some((m) => /disponível novamente/.test(m))).toBe(true);
+    expect(t.services.db.all(`SELECT id FROM audit WHERE action = 'pausa_limite_conta'`).length).toBeGreaterThan(0);
+  });
+
+  it('também aguarda quando o limite atinge o planejamento do Alfred', async () => {
+    t.cleanup();
+    t = setup({ MD2_LIMIT_RETRY_MIN: '0.0005' });
+    t.runtime.plans.push({ modo: 'resposta_direta', titulo: 't', objetivo: 'o', resposta: 'pronto', tarefas: [] });
+    const orig = t.runtime.runStructured.bind(t.runtime);
+    let first = true;
+    t.runtime.runStructured = (async (o: Parameters<typeof orig>[0]) => { if (first) { first = false; throw limit(); } return orig(o); }) as typeof t.runtime.runStructured;
+    const { executionId } = t.engine.submit({ text: 'oi' });
+    await t.engine.whenIdle();
+    expect(t.exec(executionId)).toMatchObject({ status: 'concluido', summary: 'pronto' });
+  });
+
+  it('desiste com falha explícita após a espera máxima (sem ciclo infinito)', async () => {
+    t.cleanup();
+    t = setup({ MD2_LIMIT_RETRY_MIN: '0.0005', MD2_LIMIT_MAX_WAIT_HOURS: '0.00000002' });
+    t.runtime.plans.push(plan([{ chave: 'a', agente: 'pedro' }]));
+    t.runtime.agentImpl = async () => { t.runtime.ready = false; t.runtime.accountLimit = true; throw limit(); };
+    const { executionId } = t.engine.submit({ text: 'x' });
+    await t.engine.whenIdle();
+    expect(t.exec(executionId).status).toBe('falhou');
+    expect(t.exec(executionId).error).toMatch(/limite de uso da conta Claude não voltou/);
+    expect(t.runtime.agentCalls).toHaveLength(1);
+  });
+});

@@ -29,7 +29,7 @@ const EVIDENCE: Record<string, { classification: Classification; evidence: strin
   web: { classification: 'funcional_testada', evidence: 'Pesquisa de concorrentes reais na execução do site (WebSearch). Páginas com login não são legíveis.' },
   analise_imagem: { classification: 'funcional_testada', evidence: 'Agentes inspecionaram quadros extraídos de vídeo e a logo enviada nas execuções reais.' },
   ffmpeg: { classification: 'funcional_testada', evidence: 'Corte, 9:16, textos, áudio e exportação executados de verdade; validado com ffprobe. Material de entrada usado nos testes: ver docs/STATUS.md.' },
-  playwright: { classification: 'configurada_nao_testada', evidence: 'Código de conexão ao servidor MCP existe; não foi exercitado por um agente em execução real.' },
+  playwright: { classification: 'configurada_nao_testada', evidence: 'Servidor MCP (versão fixada 0.0.85) testado diretamente em 15/11/2026: inicializa, lista 25 ferramentas e navega em páginas HTTP. Ainda não foi exercitado por um agente em execução real; file:// é bloqueado pelo próprio MCP.' },
   github: { classification: 'nao_implementada', evidence: 'Sem conector. Push e PR bloqueados pelo guard. Requer GITHUB_TOKEN e fluxo de aprovação com execução.' },
   google_drive: { classification: 'nao_implementada', evidence: 'Sem conector. Requer OAuth do Google.' },
   google_calendar: { classification: 'nao_implementada', evidence: 'Sem conector. Requer OAuth do Google.' },

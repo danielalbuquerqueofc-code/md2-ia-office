@@ -9,7 +9,7 @@ import { agentEnv, checkToolUse } from './guard.js';
 import type { SandboxStatus } from './sandbox.js';
 import { buildSandbox, detectSandbox } from './sandbox.js';
 import type { AgentRuntime, AgentToolHandlers, RunAgentOptions, RunAgentResult, RunStructuredOptions, RuntimeStatus, Usage } from './types.js';
-import { RuntimeError } from './types.js';
+import { isAccountLimit, RuntimeError } from './types.js';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const guarded = async (fn: () => Promise<string>) => {
@@ -86,6 +86,8 @@ function usageOf(m: ResultMessage): Usage {
 }
 
 const RETRY_PROBE_MS = 2 * 60_000;
+/** Versão fixada (nunca "latest"): atualizar é uma decisão revisada, não automática. Testada em 15/11/2026. */
+const PLAYWRIGHT_MCP_VERSION = '0.0.85';
 
 /** Runtime de produção: cada tarefa é uma sessão independente do Claude Agent SDK, isolada no workspace. */
 export class ClaudeAgentRuntime implements AgentRuntime {
@@ -129,17 +131,19 @@ export class ClaudeAgentRuntime implements AgentRuntime {
     try {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), 45_000);
-      let ok = false;
+      let ok = false, text = '';
       for await (const m of query({
         prompt: 'Responda apenas: ok',
         options: { ...this.base(ac.signal), tools: [], maxTurns: 1, systemPrompt: 'Verificação de conectividade.', persistSession: false },
       })) {
-        if (m.type === 'result') ok = m.subtype === 'success' && !m.is_error;
+        if (m.type === 'result') { ok = m.subtype === 'success' && !m.is_error; text = m.subtype === 'success' ? String(m.result) : ''; }
       }
       clearTimeout(timer);
       value = ok
         ? { ready: true, detail: 'Claude Agent SDK autenticado e respondendo.' }
-        : { ready: false, detail: 'O runtime respondeu com erro. Verifique ANTHROPIC_API_KEY ou o login do Claude Code.' };
+        : isAccountLimit(text)
+          ? { ready: false, accountLimit: true, detail: `Limite de uso da conta Claude atingido: ${text.slice(0, 160)}` }
+          : { ready: false, detail: 'O runtime respondeu com erro. Verifique ANTHROPIC_API_KEY ou o login do Claude Code.' };
     } catch (e) {
       value = { ready: false, detail: `Runtime indisponível: ${(e as Error).message}. Configure ANTHROPIC_API_KEY ou faça login no Claude Code.` };
     }
@@ -147,6 +151,13 @@ export class ClaudeAgentRuntime implements AgentRuntime {
     this.cached = { at: Date.now(), value };
     log[value.ready ? 'info' : 'warn']('runtime_status', { ready: value.ready });
     return value;
+  }
+
+  /** Limite da conta: marca o runtime como indisponível (sem nova chamada) e sinaliza ao motor para aguardar. */
+  private limitError(detail: string, cost: number, usage?: Usage) {
+    this.cached = { at: Date.now(), value: { ready: false, accountLimit: true, checkedAt: new Date().toISOString(), detail: `Limite de uso da conta Claude atingido: ${detail}` } };
+    log.warn('limite_da_conta', { detalhe: detail });
+    return new RuntimeError(`Limite de uso da conta Claude atingido (${detail}).`, true, cost, usage, true);
   }
 
   async runStructured<T>(opts: RunStructuredOptions): Promise<{ data: T; costUsd: number }> {
@@ -166,7 +177,9 @@ export class ClaudeAgentRuntime implements AgentRuntime {
       if (m.type !== 'result') continue;
       cost = m.total_cost_usd ?? 0;
       if (m.subtype === 'success' && m.structured_output) return { data: m.structured_output as T, costUsd: cost };
-      throw new RuntimeError(`Alfred não conseguiu produzir uma resposta estruturada (${m.subtype}).`, m.subtype !== 'error_max_budget_usd', cost);
+      const detail = m.subtype === 'success' ? String(m.result).slice(0, 200) : m.subtype;
+      if (isAccountLimit(detail)) throw this.limitError(detail, cost);
+      throw new RuntimeError(`Alfred não conseguiu produzir uma resposta estruturada: ${detail}`, m.subtype !== 'error_max_budget_usd', cost);
     }
     throw new RuntimeError('O runtime encerrou sem resultado.', true, cost);
   }
@@ -193,7 +206,7 @@ export class ClaudeAgentRuntime implements AgentRuntime {
       mcpServers: {
         md2: md2Server(opts.handlers),
         ...(opts.usePlaywright
-          ? { playwright: { type: 'stdio' as const, command: 'npx', args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated'] } }
+          ? { playwright: { type: 'stdio' as const, command: 'npx', args: ['-y', `@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`, '--headless', '--isolated'] } }
           : {}),
       },
       canUseTool: async (toolName, input) => {
@@ -229,6 +242,7 @@ export class ClaudeAgentRuntime implements AgentRuntime {
           : m.subtype === 'error_max_budget_usd' ? 'limite de custo da tarefa atingido'
           : m.subtype === 'success' ? String(m.result).slice(0, 300)
           : 'erro durante a execução';
+        if (isAccountLimit(why)) throw this.limitError(why, costUsd, usage);
         throw new RuntimeError(`Sessão do agente terminou sem concluir: ${why}.`, m.subtype !== 'error_max_budget_usd', costUsd, usage);
       }
     }

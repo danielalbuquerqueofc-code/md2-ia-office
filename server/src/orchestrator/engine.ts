@@ -70,6 +70,8 @@ export class Engine {
   private running = new Map<string, AbortController>();
   private taskSlots: Semaphore;
   private idle: Array<() => void> = [];
+  /** Execuções pausadas por limite de uso da conta → início da espera. */
+  private limited = new Map<string, number>();
 
   constructor(private s: Services) {
     this.taskSlots = new Semaphore(s.config.maxParallelTasks);
@@ -258,7 +260,9 @@ export class Engine {
       throw new RuntimeError(`Limite diário de custo atingido (US$ ${this.s.config.maxCostPerDay}). Ajuste MD2_MAX_COST_USD_PER_DAY ou aguarde o próximo dia.`, false);
     }
     const status = await this.s.runtime.status();
-    if (!status.ready) throw new RuntimeError(status.detail, false);
+    if (!status.ready && status.accountLimit) await this.waitForAccount(id, signal, status.detail);
+    else if (!status.ready) throw new RuntimeError(status.detail, false);
+    if (signal.aborted) return;
 
     if (!e.plan) {
       const plan = await this.plan(e, signal);
@@ -355,7 +359,7 @@ export class Engine {
     this.setStatus(e.id, 'planejando');
     let feedback = '';
     for (let attempt = 0; attempt < 2; attempt++) {
-      const { data, costUsd } = await this.s.runtime.runStructured<Plan>({
+      const { data, costUsd } = await this.alfred<Plan>(e.id, signal, {
         system: alfredSystem(this.s.agents, this.s.skills), prompt: prompt + feedback, schema: PLAN_SCHEMA, model: this.s.config.modelAlfred, signal,
         maxBudgetUsd: this.alfredBudget(e.id),
       });
@@ -380,17 +384,69 @@ export class Engine {
       `## Pedidos de aprovação abertos\n${approvals.map((a) => `- ${a.title} (${a.type}, ${a.status})`).join('\n') || 'Nenhum.'}`,
       e.correction_rounds >= 1 ? 'Já houve uma rodada de correção. Não solicite outra: aprove e relate com fidelidade o que ficou pendente.' : '',
     ].join('\n\n');
-    const { data, costUsd } = await this.s.runtime.runStructured<Review>({ system: reviewSystem(), prompt, schema: REVIEW_SCHEMA, model: this.s.config.modelAlfred, signal, maxBudgetUsd: this.alfredBudget(e.id) });
+    const { data, costUsd } = await this.alfred<Review>(e.id, signal, { system: reviewSystem(), prompt, schema: REVIEW_SCHEMA, model: this.s.config.modelAlfred, signal, maxBudgetUsd: this.alfredBudget(e.id) });
     this.addCost(e.id, costUsd);
     return data;
   }
 
   // ---------- tarefas ----------
 
+  /**
+   * Pausa a execução enquanto a conta Claude estiver no limite de uso. Verifica a cada
+   * MD2_LIMIT_RETRY_MIN e desiste (com falha explícita) após MD2_LIMIT_MAX_WAIT_HOURS: sem ciclo infinito.
+   */
+  private async waitForAccount(executionId: string, signal: AbortSignal, detail?: string) {
+    const { config, bus, db } = this.s;
+    const start = this.limited.get(executionId) ?? Date.now();
+    this.limited.set(executionId, start);
+    const info = detail ?? this.s.runtime.peek()?.detail ?? 'Limite de uso da conta Claude atingido.';
+    bus.emit({ executionId, type: 'erro', message: `${info} Alfred pausou a execução e retoma sozinho quando o limite voltar (verificação a cada ${Math.round(config.limitRetryMs / 60000)} min, por até ${Math.round(config.limitMaxWaitMs / 3_600_000)} h).` });
+    db.audit('sistema', 'pausa_limite_conta', { executionId });
+    log.warn('execucao_pausada_limite', { executionId });
+    for (;;) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(done, config.limitRetryMs);
+        function done() { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); }
+        signal.addEventListener('abort', done, { once: true });
+      });
+      if (signal.aborted) return;
+      const st = await this.s.runtime.status(true);
+      if (st.ready) break;
+      if (Date.now() - start > config.limitMaxWaitMs) {
+        this.limited.delete(executionId);
+        throw new RuntimeError(`O limite de uso da conta Claude não voltou em ${Math.round(config.limitMaxWaitMs / 3_600_000)} h. Execução encerrada; os entregáveis já registrados foram preservados.`, false);
+      }
+    }
+    this.limited.delete(executionId);
+    bus.emit({ executionId, type: 'log', message: 'Conta Claude disponível novamente. Alfred retomou a execução.' });
+    log.info('execucao_retomada_limite', { executionId });
+  }
+
+  /** Chamada do Alfred (planejar/validar) que aguarda a conta voltar em vez de falhar por limite de uso. */
+  private async alfred<T>(executionId: string, signal: AbortSignal, opts: Parameters<AgentRuntime['runStructured']>[0]) {
+    for (;;) {
+      try {
+        return await this.s.runtime.runStructured<T>(opts);
+      } catch (err) {
+        if (!(err instanceof RuntimeError && err.accountLimit) || signal.aborted) throw err;
+        this.addCost(executionId, err.costUsd);
+        await this.waitForAccount(executionId, signal);
+        if (signal.aborted) throw err;
+      }
+    }
+  }
+
   private async runTasks(executionId: string, signal: AbortSignal) {
     const inflight = new Map<string, Promise<void>>();
     for (;;) {
       if (signal.aborted) break;
+      if (this.limited.has(executionId)) {
+        // Limite da conta: espera as tarefas em voo terminarem, aguarda a conta voltar e retoma.
+        await Promise.allSettled(inflight.values());
+        if (signal.aborted) break;
+        await this.waitForAccount(executionId, signal);
+        continue;
+      }
       const budget = this.budgetBlock(executionId);
       if (budget && !inflight.size) {
         const pending = this.tasks(executionId).filter((t) => t.status === 'pendente');
@@ -413,7 +469,7 @@ export class Engine {
           continue;
         }
         if (deps.some((d) => d.status !== 'concluida')) continue;
-        if (budget) continue;
+        if (budget || this.limited.has(executionId)) continue;
         inflight.set(t.id, this.taskSlots.run(() => this.runTask(t.id, signal)).finally(() => inflight.delete(t.id)));
       }
       if (!inflight.size) {
@@ -520,6 +576,12 @@ export class Engine {
       const cost = delta(err instanceof RuntimeError ? err.costUsd : 0);
       this.addCost(e.id, cost);
       log.warn('tarefa_falhou', { executionId: e.id, taskId: t.id, agent: agent.id, attempt, error: err instanceof Error ? err.message : String(err) });
+      if (err instanceof RuntimeError && err.accountLimit) {
+        // Não é falha da tarefa: devolve à fila sem consumir tentativa e pausa a execução.
+        db.update('tasks', t.id, { status: 'pendente', attempt: t.attempt, error: err.message, cost_usd: t.cost_usd + cost });
+        if (!this.limited.has(e.id)) this.limited.set(e.id, Date.now());
+        return;
+      }
       const message = timedOut ? `Tempo limite de ${Math.round(config.taskTimeoutMs / 60000)} min excedido.` : err instanceof Error ? err.message : String(err);
       const retryable = !(err instanceof RuntimeError) || err.retryable;
       const retry = retryable && attempt < config.taskMaxAttempts;
