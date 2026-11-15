@@ -1,0 +1,356 @@
+{
+  "source": {
+    "repository": "danielalbuquerqueofc-code/md2-ia-office",
+    "branch": "chore/md2-02a-consolidacao",
+    "commit": "d4e3933",
+    "author": "Daniel Albuquerque",
+    "date": "2026-10-27",
+    "file": "core/src/md2AgentRegistry.ts",
+    "note": "Extraído mecanicamente do código original (validado pelo próprio validateMd2AgentRegistry do projeto original)."
+  },
+  "departments": [
+    {
+      "id": "general-management",
+      "name": "Direção-Geral",
+      "agents": 1
+    },
+    {
+      "id": "commercial",
+      "name": "Comercial",
+      "agents": 3
+    },
+    {
+      "id": "marketing",
+      "name": "Marketing",
+      "agents": 4
+    },
+    {
+      "id": "technology",
+      "name": "Tecnologia",
+      "agents": 4
+    },
+    {
+      "id": "support",
+      "name": "Atendimento",
+      "agents": 2
+    },
+    {
+      "id": "finance",
+      "name": "Financeiro",
+      "agents": 2
+    },
+    {
+      "id": "operations",
+      "name": "Operações e Projetos",
+      "agents": 2
+    },
+    {
+      "id": "production",
+      "name": "Produção e Conteúdo",
+      "agents": 2
+    },
+    {
+      "id": "legal",
+      "name": "Jurídico",
+      "agents": 1
+    },
+    {
+      "id": "administration",
+      "name": "Administrativo",
+      "agents": 1
+    }
+  ],
+  "departmentCapabilities": {
+    "general-management": [
+      "strategy.plan",
+      "work.review"
+    ],
+    "commercial": [
+      "leads.analyze",
+      "proposals.draft"
+    ],
+    "marketing": [
+      "campaigns.plan",
+      "marketing.analyze"
+    ],
+    "technology": [
+      "software.design",
+      "code.draft",
+      "tests.plan"
+    ],
+    "support": [
+      "support.triage",
+      "replies.draft"
+    ],
+    "finance": [
+      "finance.analyze",
+      "finance.reports.draft"
+    ],
+    "operations": [
+      "projects.plan",
+      "deliveries.review"
+    ],
+    "production": [
+      "content.draft",
+      "content.review"
+    ],
+    "legal": [
+      "legal.review",
+      "legal.documents.draft"
+    ],
+    "administration": [
+      "records.organize",
+      "administration.plan"
+    ]
+  },
+  "agents": [
+    {
+      "id": "carlos",
+      "name": "Carlos",
+      "departmentId": "general-management",
+      "role": "Diretor-geral",
+      "description": "Planeja a estratégia e revisa prioridades empresariais.",
+      "capabilities": [
+        "strategy.plan",
+        "work.review"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "lucas",
+      "name": "Lucas",
+      "departmentId": "commercial",
+      "role": "Analista de prospecção",
+      "description": "Analisa oportunidades a partir de informações fornecidas.",
+      "capabilities": [
+        "leads.analyze"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "fernanda",
+      "name": "Fernanda",
+      "departmentId": "commercial",
+      "role": "Analista de qualificação",
+      "description": "Avalia necessidades e adequação de potenciais clientes.",
+      "capabilities": [
+        "leads.analyze"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "rafael",
+      "name": "Rafael",
+      "departmentId": "commercial",
+      "role": "Analista de propostas",
+      "description": "Elabora minutas de propostas para revisão.",
+      "capabilities": [
+        "proposals.draft"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "mariana",
+      "name": "Mariana",
+      "departmentId": "marketing",
+      "role": "Estrategista de marketing",
+      "description": "Planeja campanhas e posicionamento.",
+      "capabilities": [
+        "campaigns.plan"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "beatriz",
+      "name": "Beatriz",
+      "departmentId": "marketing",
+      "role": "Analista de marca",
+      "description": "Planeja comunicação e consistência de marca.",
+      "capabilities": [
+        "campaigns.plan"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "gabriel",
+      "name": "Gabriel",
+      "departmentId": "marketing",
+      "role": "Analista de desempenho",
+      "description": "Analisa indicadores de marketing fornecidos.",
+      "capabilities": [
+        "marketing.analyze"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "pedro",
+      "name": "Pedro",
+      "departmentId": "marketing",
+      "role": "Planejador de mídia",
+      "description": "Elabora planos de mídia sem publicar campanhas.",
+      "capabilities": [
+        "campaigns.plan",
+        "marketing.analyze"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "andre",
+      "name": "André",
+      "departmentId": "technology",
+      "role": "Programador",
+      "description": "Elabora propostas de código para revisão.",
+      "capabilities": [
+        "code.draft"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "camila",
+      "name": "Camila",
+      "departmentId": "technology",
+      "role": "Arquiteta de software",
+      "description": "Desenha soluções e contratos técnicos.",
+      "capabilities": [
+        "software.design"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "diego",
+      "name": "Diego",
+      "departmentId": "technology",
+      "role": "Analista de automação",
+      "description": "Desenha fluxos de automação sem conectar serviços.",
+      "capabilities": [
+        "software.design",
+        "code.draft"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "sofia",
+      "name": "Sofia",
+      "departmentId": "technology",
+      "role": "Analista de qualidade",
+      "description": "Planeja cenários de teste e critérios de aceite.",
+      "capabilities": [
+        "tests.plan"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "juliana",
+      "name": "Juliana",
+      "departmentId": "support",
+      "role": "Analista de suporte",
+      "description": "Classifica solicitações e prepara respostas.",
+      "capabilities": [
+        "support.triage",
+        "replies.draft"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "bruno",
+      "name": "Bruno",
+      "departmentId": "support",
+      "role": "Analista de relacionamento",
+      "description": "Prepara respostas de acompanhamento e retenção.",
+      "capabilities": [
+        "replies.draft"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "renata",
+      "name": "Renata",
+      "departmentId": "finance",
+      "role": "Analista financeiro",
+      "description": "Analisa informações financeiras fornecidas.",
+      "capabilities": [
+        "finance.analyze"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "eduardo",
+      "name": "Eduardo",
+      "departmentId": "finance",
+      "role": "Analista de controle financeiro",
+      "description": "Elabora relatórios financeiros para revisão.",
+      "capabilities": [
+        "finance.reports.draft"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "thiago",
+      "name": "Thiago",
+      "departmentId": "operations",
+      "role": "Coordenador de projetos",
+      "description": "Planeja atividades, dependências e entregas.",
+      "capabilities": [
+        "projects.plan"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "amanda",
+      "name": "Amanda",
+      "departmentId": "operations",
+      "role": "Analista de entregas",
+      "description": "Revisa entregas segundo critérios fornecidos.",
+      "capabilities": [
+        "deliveries.review"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "isabela",
+      "name": "Isabela",
+      "departmentId": "production",
+      "role": "Redatora",
+      "description": "Elabora conteúdo a partir de briefings.",
+      "capabilities": [
+        "content.draft"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "vinicius",
+      "name": "Vinícius",
+      "departmentId": "production",
+      "role": "Editor de conteúdo",
+      "description": "Revisa clareza e consistência do conteúdo.",
+      "capabilities": [
+        "content.review"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "helena",
+      "name": "Helena",
+      "departmentId": "legal",
+      "role": "Analista jurídico",
+      "description": "Prepara análises e minutas para revisão humana.",
+      "capabilities": [
+        "legal.review",
+        "legal.documents.draft"
+      ],
+      "initialState": "inactive"
+    },
+    {
+      "id": "patricia",
+      "name": "Patrícia",
+      "departmentId": "administration",
+      "role": "Analista administrativo",
+      "description": "Organiza registros e planeja rotinas administrativas.",
+      "capabilities": [
+        "records.organize",
+        "administration.plan"
+      ],
+      "initialState": "inactive"
+    }
+  ]
+}
