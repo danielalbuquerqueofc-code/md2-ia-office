@@ -48,8 +48,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, rootDir = proce
     taskTimeoutMs: num(env.MD2_TASK_TIMEOUT_MIN, 25) * 60_000,
     taskMaxTurns: num(env.MD2_TASK_MAX_TURNS, 60),
     taskMaxAttempts: num(env.MD2_TASK_MAX_ATTEMPTS, 2),
-    maxCostPerExecution: num(env.MD2_MAX_COST_USD_PER_EXECUTION, 8),
-    maxCostPerDay: num(env.MD2_MAX_COST_USD_PER_DAY, 40),
+    maxCostPerExecution: num(env.MD2_MAX_COST_USD_PER_EXECUTION, 15),
+    maxCostPerDay: num(env.MD2_MAX_COST_USD_PER_DAY, 60),
     authorizedDirs: (env.MD2_AUTHORIZED_DIRS || '')
       .split(',')
       .map((s) => s.trim())

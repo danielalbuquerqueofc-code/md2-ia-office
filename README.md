@@ -47,7 +47,7 @@ Para manter o serviço rodando 24 horas, execute `npm start` sob um gerenciador 
 | `MD2_ADMIN_PASSWORD` | Senha de acesso à interface | vazio (somente local) |
 | `MD2_DATA_DIR` | Banco SQLite, workspaces, uploads e entregáveis | `./data` |
 | `MD2_AUTHORIZED_DIRS` | Pastas locais que os agentes podem **ler** (ex.: sua pasta de clientes) | nenhuma |
-| `MD2_MAX_COST_USD_PER_EXECUTION` / `_PER_DAY` | Teto de gasto | 8 / 40 |
+| `MD2_MAX_COST_USD_PER_EXECUTION` / `_PER_DAY` | Teto de gasto (um site completo custou ~US$ 9 no teste real) | 15 / 60 |
 | `MD2_MAX_PARALLEL_TASKS` / `_EXECUTIONS` | Concorrência | 3 / 2 |
 | `MD2_TASK_TIMEOUT_MIN`, `MD2_TASK_MAX_ATTEMPTS` | Tempo limite e tentativas por tarefa | 25 / 2 |
 | `MD2_MODEL_ALFRED`, `MD2_MODEL_AGENTS` | Modelo de cada camada | padrão da conta |
