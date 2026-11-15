@@ -28,7 +28,7 @@ export interface Agent {
 export interface Message { id: string; role: 'user' | 'assistant'; content: string; attachments: Array<{ id: string; name: string }>; execution_id: string | null; created_at: string }
 export interface ExecutionDetail { execution: Execution; tasks: Task[]; events: LiveEvent[]; deliverables: Deliverable[]; approvals: Approval[] }
 export interface AppState {
-  runtime: { ready: boolean; detail: string; checkedAt?: string };
+  runtime: { ready: boolean; detail: string; checkedAt?: string; pending?: boolean };
   sandbox: { active: boolean; mode: string; detail: string };
   counts: { running: number; approvals: number; review: number };
   costToday: number;

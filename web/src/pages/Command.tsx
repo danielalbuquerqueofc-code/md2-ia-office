@@ -111,7 +111,7 @@ export function Command({ conversationId, agents, runtime }: { conversationId?: 
         )}
       </div>
       <div className="composer-wrap">
-        {runtime && !runtime.ready && <div className="banner err" style={{ maxWidth: 860, margin: '0 auto 10px' }}><Icon name="shield" /> <span><b>Runtime dos agentes indisponível.</b> {runtime.detail} Enquanto isso, nenhuma tarefa é executada.</span></div>}
+        {runtime && !runtime.ready && !runtime.pending && <div className="banner err" style={{ maxWidth: 860, margin: '0 auto 10px' }}><Icon name="shield" /> <span><b>Runtime dos agentes indisponível.</b> {runtime.detail} Enquanto isso, nenhuma tarefa é executada.</span></div>}
         {error && <div className="banner err" style={{ maxWidth: 860, margin: '0 auto 10px' }}>{error}</div>}
         <div className={`composer ${drag ? 'drag' : ''}`}
           onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}

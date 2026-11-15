@@ -106,8 +106,8 @@ export function createApp(s: Services, engine: Engine) {
 
   type Handler = (req: IncomingMessage, res: ServerResponse, m: RegExpExecArray, url: URL) => Promise<unknown> | unknown;
   const routes: Array<[string, RegExp, Handler]> = [
-    ['GET', /^\/api\/state$/, async () => ({
-      runtime: await s.runtime.status(),
+    ['GET', /^\/api\/state$/, () => ({
+      runtime: runtimeState(),
       sandbox: s.runtime.sandbox(),
       counts: {
         running: db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM executions WHERE status NOT IN ('concluido','falhou','cancelado','aguardando_aprovacao')`)!.n,
@@ -251,6 +251,17 @@ export function createApp(s: Services, engine: Engine) {
     if (!h) return false;
     const name = h.toLowerCase().replace(/:\d+$/, '');
     return allowedHosts.has(name) || allowedHosts.has(h.toLowerCase());
+  };
+  // A primeira verificação do runtime leva alguns segundos: roda em segundo plano e avisa a interface ao terminar.
+  let probing = false;
+  const runtimeState = () => {
+    const known = s.runtime.peek();
+    if (known) return known;
+    if (!probing) {
+      probing = true;
+      void s.runtime.status().then((r) => s.bus.emit({ type: 'status', message: r.ready ? 'Runtime conectado.' : `Runtime indisponível: ${r.detail}` })).finally(() => { probing = false; });
+    }
+    return { ready: false, pending: true, detail: 'Verificando a conexão com o runtime…' };
   };
   const runtimeInfo = () => ({ ready: s.runtime.peek()?.ready ?? null, sandbox: s.runtime.sandbox() });
 

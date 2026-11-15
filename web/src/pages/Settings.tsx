@@ -48,7 +48,7 @@ export function Settings({ state }: { state: AppState | null }) {
         </div>
         <div className="card pad">
           <h2 style={{ marginBottom: 8 }}>Runtime e isolamento</h2>
-          <Row k="Claude Agent SDK" v={state ? <Badge status={state.runtime.ready ? 'disponivel' : 'indisponivel'}>{state.runtime.ready ? 'Conectado' : 'Offline'}</Badge> : '…'} />
+          <Row k="Claude Agent SDK" v={state ? <Badge status={state.runtime.ready ? 'disponivel' : state.runtime.pending ? 'para_revisao' : 'indisponivel'}>{state.runtime.ready ? 'Conectado' : state.runtime.pending ? 'Verificando…' : 'Offline'}</Badge> : '…'} />
           {state?.runtime.checkedAt && <p className="xs dim" style={{ marginTop: 6 }}>Última verificação: {dateTime(state.runtime.checkedAt)}. A verificação usa uma chamada mínima ao modelo e não é repetida automaticamente enquanto o runtime está saudável.</p>}
           <Row k="Isolamento dos comandos dos agentes" env="MD2_AGENT_SANDBOX" v={state ? <Badge status={state.sandbox.active ? 'disponivel' : 'indisponivel'}>{state.sandbox.active ? 'Sandbox ativo' : 'Inativo'}</Badge> : '…'} />
           {state && <p className="small muted" style={{ margin: '8px 0' }}>{state.sandbox.detail}</p>}

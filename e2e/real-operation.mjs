@@ -42,7 +42,8 @@ async function login() {
 
 try {
   start(); await waitUp(); await login();
-  const state = (await api('/api/state')).data;
+  let state = (await api('/api/state')).data;
+  for (let i = 0; state.runtime?.pending && i < 60; i++) { await sleep(1000); state = (await api('/api/state')).data; }
   check(state.sandbox?.active === true, 'sandbox de SO ativo para os agentes', state.sandbox?.detail);
   check(state.runtime?.ready === true, 'runtime conectado', state.runtime?.detail);
 

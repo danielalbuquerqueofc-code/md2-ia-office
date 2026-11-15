@@ -45,3 +45,5 @@ playwright-report/
 /data/
 /data-*/
 /backups/
+/data-*-relatorio.json
+/data-*-server.log
