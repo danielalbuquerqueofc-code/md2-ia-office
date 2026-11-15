@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { redact } from '../src/logger.js';
 import { checkToolUse, realResolve } from '../src/runtime/guard.js';
-import { buildSandbox, DENIED_ENV, detectSandbox } from '../src/runtime/sandbox.js';
+import { buildSandbox, DENIED_ENV, detectSandbox, inPath } from '../src/runtime/sandbox.js';
 import { ROOT } from './helpers.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'md2-sec-'));
@@ -53,6 +53,12 @@ describe('sandbox de sistema operacional', () => {
     const missing = detectSandbox(base, (b) => b !== 'bwrap', 'linux');
     expect(missing.active).toBe(false);
     expect(missing.detail).toMatch(/bubblewrap/);
+  });
+  it('detecta binários pelo PATH sem executá-los (socat não aceita --version)', () => {
+    const dir = fs.mkdtempSync(path.join(tmp, 'bin-'));
+    fs.writeFileSync(path.join(dir, 'socat'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    expect(inPath('socat', dir)).toBe(true);
+    expect(inPath('bwrap', dir)).toBe(false);
   });
   it('respeita off e required', () => {
     expect(detectSandbox(loadConfig({ MD2_AGENT_SANDBOX: 'off' }, ROOT), () => true, 'linux').active).toBe(false);

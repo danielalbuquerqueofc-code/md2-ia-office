@@ -59,7 +59,8 @@ function mirror(src: string, dest: string, acc: { mirrored: number; copied: numb
     acc.mirrored++;
     const st = fs.statSync(s);
     const dt = fs.existsSync(d) ? fs.statSync(d) : null;
-    if (dt && dt.size === st.size && dt.mtimeMs >= st.mtimeMs) continue;
+    // Tolerância de 2 ms: utimes grava com precisão de milissegundo e a origem pode ter frações.
+    if (dt && dt.size === st.size && dt.mtimeMs >= st.mtimeMs - 2) continue;
     fs.mkdirSync(path.dirname(d), { recursive: true });
     fs.copyFileSync(s, d);
     fs.utimesSync(d, st.atime, st.mtime);

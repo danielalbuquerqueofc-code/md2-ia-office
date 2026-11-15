@@ -29,6 +29,9 @@ describe('backup e restauração', () => {
     expect(snap.manifest).toMatchObject({ format: 'md2-backup-v1', verified: true, db: { integrity: 'ok' } });
     expect(snap.manifest.counts.deliverables).toBe(1);
     expect(svc.verify(snap).checked.deliverableFiles).toBe(1);
+    expect(snap.manifest.files.copied).toBeGreaterThan(0);
+    const again = await svc.create();
+    expect(again.manifest.files.copied).toBe(0); // espelho incremental: nada mudou, nada é copiado
     const copy = new DatabaseSync(path.join(snap.dir, 'md2.sqlite'), { readOnly: true });
     expect((copy.prepare('SELECT COUNT(*) AS n FROM executions').get() as { n: number }).n).toBe(1);
     copy.close();

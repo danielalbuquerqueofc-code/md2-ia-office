@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Config } from '../config.js';
@@ -10,16 +10,18 @@ export interface SandboxStatus {
   detail: string;
 }
 
-const has = (bin: string) => {
-  try { return spawnSync(bin, ['--version'], { stdio: 'ignore', timeout: 5000 }).status === 0; } catch { return false; }
-};
+/** Procura o executável no PATH (não executa: `socat --version` retorna erro, socat usa `-V`). */
+export const inPath = (bin: string, envPath = process.env.PATH ?? '') =>
+  envPath.split(path.delimiter).filter(Boolean).some((dir) => {
+    try { fs.accessSync(path.join(dir, bin), fs.constants.X_OK); return true; } catch { return false; }
+  });
 
 /**
  * Detecta se o sandbox de sistema operacional do Claude Agent SDK pode rodar aqui.
  * Linux exige bubblewrap (bwrap) e socat; macOS usa o sandbox nativo do sistema.
  * Validado neste projeto apenas em Linux (ver docs/SEGURANCA.md).
  */
-export function detectSandbox(config: Config, probe: (bin: string) => boolean = has, platform = process.platform): SandboxStatus {
+export function detectSandbox(config: Config, probe: (bin: string) => boolean = inPath, platform = process.platform): SandboxStatus {
   if (config.agentSandbox === 'off') {
     return { mode: 'off', active: false, platformSupported: false, detail: 'Desativado por MD2_AGENT_SANDBOX=off. Comandos dos agentes rodam com as permissões do servidor.' };
   }
