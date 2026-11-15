@@ -7,10 +7,13 @@ export interface Department {
 export interface AgentDef {
   id: string; name: string; department: string; role: string; specialty: string;
   capabilities: string[]; instructions: string[]; limits: string[]; quality: string[];
-  skills: string[]; tools: string[]; provisionalName?: boolean;
+  skills: string[]; tools: string[];
+  nameStatus: 'especificacao' | 'especificacao_condicional' | 'provisorio';
+  roleStatus: 'especificacao' | 'definido_na_reformulacao';
 }
 export interface AgentRegistryFile {
   alfred: { name: string; role: string };
+  identityPolicy: { nameStatus: Record<string, string>; roleStatus: Record<string, string> };
   common: { limits: string[]; outputFormat: string[] };
   departments: Department[];
   agents: AgentDef[];

@@ -18,6 +18,8 @@ outputs: [entregas/design/especificacao-layout.md]
 6. Liste componentes (botões, cartões, formulário, cabeçalho, rodapé) com estados.
 7. Salve em `entregas/design/especificacao-layout.md`.
 
+**Tamanho:** a especificação é um insumo para o desenvolvimento, não um documento final. Para uma página única, mire em até ~10 KB: não reproduza os textos da copy (referencie o arquivo de textos pela seção), não repita tokens em cada seção e descreva só o que muda entre desktop e celular. Medido no teste real de 15/11/2026: uma especificação de 68 KB custou US$ 1,93 e foi relida integralmente pelo desenvolvimento.
+
 ## Validação
 - Contraste texto/fundo de pelo menos 4,5:1 para corpo (calcule; não estime).
 - Toda seção tem função e conteúdo de origem identificado.
