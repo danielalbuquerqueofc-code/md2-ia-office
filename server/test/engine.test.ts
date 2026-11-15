@@ -162,9 +162,11 @@ describe('motor de orquestração (runtime substituído por dublê de teste)', (
     t.runtime.agentImpl = async () => ({ text: 'caro', costUsd: 0.06 });
     const { executionId } = t.engine.submit({ text: 'x' });
     await t.engine.whenIdle();
-    expect(t.tasks(executionId).map((x) => x.status)).toEqual(['concluida', 'falhou']);
-    expect(t.tasks(executionId)[1].error).toMatch(/Limite de custo/);
+    expect(t.tasks(executionId).map((x) => x.status)).toEqual(['concluida', 'cancelada']);
+    expect(t.tasks(executionId)[1].error).toMatch(/orçamento da execução esgotado/);
     expect(t.runtime.agentCalls).toHaveLength(1);
+    expect(t.runtime.agentCalls[0].maxBudgetUsd).toBeLessThanOrEqual(0.05);
+    expect(t.events(executionId).filter((e) => /interrompeu 1 tarefa/.test(e.message))).toHaveLength(1);
   });
 
   it('aplica tempo limite por tarefa', async () => {

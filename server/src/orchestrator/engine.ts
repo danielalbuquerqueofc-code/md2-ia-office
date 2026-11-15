@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { BackupService } from '../backup.js';
 import type { Config } from '../config.js';
 import type { Db, ExecutionRow, ExecutionStatus, TaskRow } from '../db.js';
 import { newId, now, TERMINAL } from '../db.js';
@@ -8,7 +9,8 @@ import type { AgentRegistry } from '../registry/agents.js';
 import type { KnowledgeEngine } from '../registry/knowledge.js';
 import type { SkillRegistry } from '../registry/skills.js';
 import type { ToolRegistry } from '../registry/tools.js';
-import type { AgentRuntime, AgentToolHandlers } from '../runtime/types.js';
+import { log } from '../logger.js';
+import type { AgentRuntime, AgentToolHandlers, Usage } from '../runtime/types.js';
 import { RuntimeError } from '../runtime/types.js';
 import type { Plan, Review } from './alfred.js';
 import { alfredSystem, INJECTION_RULE, PLAN_SCHEMA, REVIEW_SCHEMA, reviewSystem, validatePlan } from './alfred.js';
@@ -17,6 +19,7 @@ import type { Deliverables } from './deliverables.js';
 export interface Services {
   config: Config; db: Db; bus: EventBus; runtime: AgentRuntime;
   agents: AgentRegistry; knowledge: KnowledgeEngine; skills: SkillRegistry; tools: ToolRegistry; deliverables: Deliverables;
+  backups: BackupService;
 }
 export interface Attachment { id: string; name: string }
 
@@ -33,6 +36,14 @@ const STATUS_TEXT: Record<ExecutionStatus, string> = {
   cancelado: 'Execução cancelada.',
 };
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n[...truncado]` : s);
+
+/** Nome livre na pasta: "foto.jpg" → "foto (2).jpg" se já existir. */
+export function uniqueName(dir: string, name: string) {
+  if (!fs.existsSync(path.join(dir, name))) return name;
+  const ext = path.extname(name), base = name.slice(0, name.length - ext.length);
+  for (let i = 2; ; i++) if (!fs.existsSync(path.join(dir, `${base} (${i})${ext}`))) return `${base} (${i})${ext}`;
+}
+const usageCols = (u?: Usage): Record<string, number> => (u ? { turns: u.turns, input_tokens: u.inputTokens, output_tokens: u.outputTokens, cache_read_tokens: u.cacheReadTokens } : {});
 
 class Semaphore {
   private waiting: Array<() => void> = [];
@@ -95,8 +106,10 @@ export class Engine {
     for (const a of input.attachments ?? []) {
       const up = db.get<{ name: string; rel_path: string }>('SELECT name, rel_path FROM uploads WHERE id = :id', { id: a.id });
       if (!up) continue;
-      fs.copyFileSync(path.join(this.s.config.dataDir, up.rel_path), path.join(ws, 'entrada', up.name));
-      attachments.push({ id: a.id, name: up.name });
+      // Nunca sobrescreve um anexo anterior com o mesmo nome: gera "nome (2).ext".
+      const name = uniqueName(path.join(ws, 'entrada'), up.name);
+      fs.copyFileSync(path.join(this.s.config.dataDir, up.rel_path), path.join(ws, 'entrada', name));
+      attachments.push({ id: a.id, name });
     }
     const executionId = newId();
     db.insert('executions', { id: executionId, conversation_id: conversationId, request: text, status: 'recebido', created_at: ts, updated_at: ts });
@@ -113,13 +126,35 @@ export class Engine {
   /** Retoma execuções interrompidas por queda/reinício do processo. */
   recover() {
     const { db } = this.s;
+    const { config, bus } = this.s;
     const open = db.all<ExecutionRow>(`SELECT * FROM executions WHERE status NOT IN ('concluido','falhou','cancelado','aguardando_aprovacao') ORDER BY created_at`);
+    let resumed = 0;
     for (const e of open) {
-      db.run(`UPDATE tasks SET status = 'pendente' WHERE execution_id = :e AND status = 'executando'`, { e: e.id });
-      this.s.bus.emit({ executionId: e.id, type: 'log', message: 'Execução retomada após reinício do sistema.' });
+      const recoveries = e.recoveries + 1;
+      db.update('executions', e.id, { recoveries });
+      // Teto de recuperações por execução: impede ciclo infinito se a própria execução derruba o processo.
+      if (recoveries > config.maxRecoveries) {
+        db.run(`UPDATE tasks SET status = 'cancelada', error = 'Execução encerrada após interrupções repetidas.', finished_at = :t WHERE execution_id = :e AND status IN ('pendente','executando')`, { e: e.id, t: now() });
+        this.fail(e.id, new RuntimeError(`A execução foi interrompida ${e.recoveries + 1} vezes por reinício do sistema e não será retomada automaticamente (limite MD2_MAX_RECOVERIES=${config.maxRecoveries}). Os entregáveis já registrados foram preservados.`, false));
+        log.warn('recuperacao_abandonada', { executionId: e.id, recoveries });
+        continue;
+      }
+      for (const t of db.all<TaskRow>(`SELECT * FROM tasks WHERE execution_id = :e AND status = 'executando'`, { e: e.id })) {
+        const interruptions = t.interruptions + 1;
+        if (t.attempt >= config.taskMaxAttempts) {
+          db.update('tasks', t.id, { status: 'falhou', interruptions, error: `Interrompida por reinício do sistema na tentativa ${t.attempt} de ${config.taskMaxAttempts}.`, finished_at: now() });
+          bus.emit({ executionId: e.id, taskId: t.id, agentId: t.agent_id, type: 'erro', message: `Tarefa "${t.title}" interrompida por reinício e sem tentativas restantes.`, data: { status: 'falhou' } });
+        } else {
+          db.update('tasks', t.id, { status: 'pendente', interruptions, error: 'Interrompida por reinício do sistema; será retomada.' });
+          bus.emit({ executionId: e.id, taskId: t.id, agentId: t.agent_id, type: 'log', message: `Tarefa "${t.title}" interrompida por reinício; será retomada da sessão salva.` });
+        }
+      }
+      bus.emit({ executionId: e.id, type: 'log', message: `Execução retomada após reinício do sistema (recuperação ${recoveries} de ${config.maxRecoveries}).` });
+      log.info('execucao_retomada', { executionId: e.id, recoveries });
       this.enqueue(e.id);
+      resumed++;
     }
-    return open.length;
+    return resumed;
   }
 
   cancel(executionId: string) {
@@ -173,6 +208,23 @@ export class Engine {
     const ts = now();
     this.s.db.update('executions', id, { status, updated_at: ts, ...(TERMINAL.includes(status) ? { finished_at: ts } : {}), ...extra });
     this.s.bus.emit({ executionId: id, type: 'status', message: STATUS_TEXT[status], data: { status } });
+  }
+
+  /** Motivo pelo qual a execução não pode gastar mais, ou null. */
+  private budgetBlock(executionId: string): string | null {
+    const { config } = this.s;
+    const e = this.execution(executionId);
+    if (!e) return null;
+    if (e.cost_usd >= config.maxCostPerExecution) return `orçamento da execução esgotado (US$ ${e.cost_usd.toFixed(2)} de US$ ${config.maxCostPerExecution}).`;
+    if (this.spentToday() >= config.maxCostPerDay) return `limite diário de custo atingido (US$ ${config.maxCostPerDay}).`;
+    return null;
+  }
+
+  /** Teto para cada chamada do Alfred (planejar/validar): no máximo US$ 2 e nunca acima do que resta. */
+  private alfredBudget(executionId: string) {
+    const { config } = this.s;
+    const e = this.execution(executionId)!;
+    return Math.max(0.1, Math.min(2, config.maxCostPerExecution - e.cost_usd, config.maxCostPerDay - this.spentToday()));
   }
 
   private addCost(executionId: string, usd: number) {
@@ -305,6 +357,7 @@ export class Engine {
     for (let attempt = 0; attempt < 2; attempt++) {
       const { data, costUsd } = await this.s.runtime.runStructured<Plan>({
         system: alfredSystem(this.s.agents, this.s.skills), prompt: prompt + feedback, schema: PLAN_SCHEMA, model: this.s.config.modelAlfred, signal,
+        maxBudgetUsd: this.alfredBudget(e.id),
       });
       this.addCost(e.id, costUsd);
       const errors = validatePlan(data, this.s.agents, this.s.skills);
@@ -327,7 +380,7 @@ export class Engine {
       `## Pedidos de aprovação abertos\n${approvals.map((a) => `- ${a.title} (${a.type}, ${a.status})`).join('\n') || 'Nenhum.'}`,
       e.correction_rounds >= 1 ? 'Já houve uma rodada de correção. Não solicite outra: aprove e relate com fidelidade o que ficou pendente.' : '',
     ].join('\n\n');
-    const { data, costUsd } = await this.s.runtime.runStructured<Review>({ system: reviewSystem(), prompt, schema: REVIEW_SCHEMA, model: this.s.config.modelAlfred, signal });
+    const { data, costUsd } = await this.s.runtime.runStructured<Review>({ system: reviewSystem(), prompt, schema: REVIEW_SCHEMA, model: this.s.config.modelAlfred, signal, maxBudgetUsd: this.alfredBudget(e.id) });
     this.addCost(e.id, costUsd);
     return data;
   }
@@ -338,6 +391,16 @@ export class Engine {
     const inflight = new Map<string, Promise<void>>();
     for (;;) {
       if (signal.aborted) break;
+      const budget = this.budgetBlock(executionId);
+      if (budget && !inflight.size) {
+        const pending = this.tasks(executionId).filter((t) => t.status === 'pendente');
+        if (pending.length) {
+          this.s.db.run(`UPDATE tasks SET status = 'cancelada', error = :m, finished_at = :t WHERE execution_id = :e AND status = 'pendente'`, { e: executionId, m: budget, t: now() });
+          this.s.bus.emit({ executionId, type: 'erro', message: `Alfred interrompeu ${pending.length} tarefa(s) restante(s): ${budget}` });
+          log.warn('orcamento_esgotado', { executionId, canceladas: pending.length });
+        }
+        break;
+      }
       const tasks = this.tasks(executionId);
       const byKey = new Map(tasks.map((t) => [t.key, t]));
       for (const t of tasks) {
@@ -350,6 +413,7 @@ export class Engine {
           continue;
         }
         if (deps.some((d) => d.status !== 'concluida')) continue;
+        if (budget) continue;
         inflight.set(t.id, this.taskSlots.run(() => this.runTask(t.id, signal)).finally(() => inflight.delete(t.id)));
       }
       if (!inflight.size) {
@@ -367,10 +431,18 @@ export class Engine {
     if (t.status !== 'pendente' || signal.aborted) return;
     const e = this.execution(t.execution_id)!;
     const agent = this.s.agents.get(t.agent_id)!;
-    const remaining = config.maxCostPerExecution - e.cost_usd;
-    if (remaining <= 0) {
-      db.update('tasks', t.id, { status: 'falhou', error: `Limite de custo por execução atingido (US$ ${config.maxCostPerExecution}).`, finished_at: now() });
-      bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: 'erro', message: `${agent.name} não iniciou "${t.title}": limite de custo da execução atingido.`, data: { status: 'falhou' } });
+    const block = this.budgetBlock(e.id);
+    if (block) return; // runTasks cancela as pendentes com uma única mensagem
+    // Orçamento desta tentativa: o menor entre o teto por tarefa (descontado o já gasto nela), o que resta da execução e o que resta do dia.
+    const limits = [
+      { left: config.maxCostPerTask - t.cost_usd, why: `limite de custo por tarefa atingido (US$ ${config.maxCostPerTask})` },
+      { left: config.maxCostPerExecution - e.cost_usd, why: `orçamento da execução esgotado (US$ ${config.maxCostPerExecution})` },
+      { left: config.maxCostPerDay - this.spentToday(), why: `limite diário de custo atingido (US$ ${config.maxCostPerDay})` },
+    ].sort((a, b) => a.left - b.left);
+    const budget = limits[0].left;
+    if (budget <= 0.01) {
+      db.update('tasks', t.id, { status: 'falhou', error: `Não iniciada: ${limits[0].why}.`, finished_at: now() });
+      bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: 'erro', message: `${agent.name} não iniciou "${t.title}": ${limits[0].why}.`, data: { status: 'falhou' } });
       return;
     }
     const attempt = t.attempt + 1;
@@ -415,6 +487,10 @@ export class Engine {
       consultarConhecimento: async (a) => this.s.knowledge.context(a.consulta, [], 6000) || 'Nada encontrado na biblioteca para esta consulta.',
     };
 
+    // Sessão retomada: o SDK reporta custo e uso ACUMULADOS da sessão. Só o excedente sobre o já
+    // contabilizado nesta tarefa é novo gasto (evita contar em dobro as retentativas).
+    const resuming = attempt > 1 && t.session_id ? t.session_id : undefined;
+    const delta = (reported: number) => Math.max(0, reported - (resuming ? t.cost_usd : 0));
     const ac = new AbortController();
     const onAbort = () => ac.abort();
     signal.addEventListener('abort', onAbort, { once: true });
@@ -424,25 +500,30 @@ export class Engine {
       const res = await this.s.runtime.runAgent({
         system: this.s.agents.systemPrompt(agent), prompt, cwd: ws, sdkTools: resolved.sdkTools,
         readDirs: [...config.authorizedDirs, path.join(config.rootDir, 'skills'), path.join(config.rootDir, 'knowledge')],
-        usePlaywright: resolved.usePlaywright, handlers, maxTurns: config.taskMaxTurns, maxBudgetUsd: remaining,
-        model: config.modelAgents, resumeSessionId: attempt > 1 ? (t.session_id ?? undefined) : undefined, signal: ac.signal,
+        usePlaywright: resolved.usePlaywright, handlers, maxTurns: config.taskMaxTurns, maxBudgetUsd: budget,
+        dataDir: config.dataDir, model: config.modelAgents, resumeSessionId: resuming, signal: ac.signal,
         onActivity: (a) => {
           if (a.kind === 'sessao') db.update('tasks', t.id, { session_id: a.sessionId ?? null });
-          else bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: a.kind === 'ferramenta' ? 'atividade' : 'log', message: a.message, data: a.tool ? { tool: a.tool } : undefined });
+          else if (a.kind === 'bloqueio') {
+            db.audit(`agente:${agent.id}`, 'guard_bloqueio', { executionId: e.id, taskId: t.id, tool: a.tool, motivo: a.message });
+            bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: 'seguranca', message: a.message, data: { tool: a.tool } });
+          } else bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: a.kind === 'ferramenta' ? 'atividade' : 'log', message: a.message, data: a.tool ? { tool: a.tool } : undefined });
         },
       });
-      this.addCost(e.id, res.costUsd);
+      const spent = delta(res.costUsd);
+      this.addCost(e.id, spent);
       if (signal.aborted) return;
-      db.update('tasks', t.id, { status: 'concluida', result: res.text, cost_usd: t.cost_usd + res.costUsd, session_id: res.sessionId ?? t.session_id, finished_at: now() });
+      db.update('tasks', t.id, { status: 'concluida', result: res.text, cost_usd: t.cost_usd + spent, session_id: res.sessionId ?? t.session_id, finished_at: now(), ...usageCols(res.usage) });
       bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: 'tarefa', message: `${agent.name} concluiu: ${t.title}`, data: { status: 'concluida' } });
     } catch (err) {
       if (signal.aborted) return;
-      const cost = err instanceof RuntimeError ? err.costUsd : 0;
+      const cost = delta(err instanceof RuntimeError ? err.costUsd : 0);
       this.addCost(e.id, cost);
+      log.warn('tarefa_falhou', { executionId: e.id, taskId: t.id, agent: agent.id, attempt, error: err instanceof Error ? err.message : String(err) });
       const message = timedOut ? `Tempo limite de ${Math.round(config.taskTimeoutMs / 60000)} min excedido.` : err instanceof Error ? err.message : String(err);
       const retryable = !(err instanceof RuntimeError) || err.retryable;
       const retry = retryable && attempt < config.taskMaxAttempts;
-      db.update('tasks', t.id, { status: retry ? 'pendente' : 'falhou', error: message, cost_usd: t.cost_usd + cost, finished_at: retry ? null : now() });
+      db.update('tasks', t.id, { status: retry ? 'pendente' : 'falhou', error: message, cost_usd: t.cost_usd + cost, finished_at: retry ? null : now(), ...usageCols(err instanceof RuntimeError ? err.usage : undefined) });
       bus.emit({
         executionId: e.id, taskId: t.id, agentId: agent.id, type: 'erro',
         message: retry ? `${agent.name} falhou em "${t.title}" (${message}). Alfred determinou nova tentativa.` : `${agent.name} não concluiu "${t.title}": ${message}`,
@@ -477,15 +558,20 @@ export class Engine {
     return { status: approved ? 'aprovado' : 'rejeitado', outcome };
   }
 
-  decideDeliverable(id: string, decision: 'aprovar' | 'ajustar', note?: string) {
+  decideDeliverable(id: string, decision: 'aprovar' | 'ajustar', note?: string, clientRequestId?: string) {
     const { db } = this.s;
     const d = db.get<{ id: string; name: string; conversation_id: string }>('SELECT id, name, conversation_id FROM deliverables WHERE id = :id', { id });
     if (!d) throw new Error('Entregável não encontrado.');
+    if (clientRequestId) {
+      // Clique duplo / reenvio: devolve o pedido já registrado sem criar outra execução.
+      const dup = db.get<{ execution_id: string; conversation_id: string }>('SELECT execution_id, conversation_id FROM messages WHERE client_request_id = :r', { r: clientRequestId });
+      if (dup) return { conversationId: dup.conversation_id, executionId: dup.execution_id, duplicate: true };
+    }
     if (decision === 'ajustar' && !note?.trim()) throw new Error('Descreva os ajustes desejados.');
     db.update('deliverables', id, { status: decision === 'aprovar' ? 'aprovado' : 'ajustes_solicitados', decision_note: note ?? null, updated_at: now() });
     db.audit('usuario', `entregavel_${decision}`, { id, name: d.name, note });
     this.s.bus.emit({ type: 'entregavel', message: decision === 'aprovar' ? `Você aprovou o entregável "${d.name}".` : `Você pediu ajustes em "${d.name}".`, data: { id } });
-    if (decision === 'ajustar') return this.submit({ conversationId: d.conversation_id, text: `Ajustes no entregável "${d.name}": ${note!.trim()}` });
+    if (decision === 'ajustar') return this.submit({ conversationId: d.conversation_id, text: `Ajustes no entregável "${d.name}": ${note!.trim()}`, clientRequestId });
     return { conversationId: d.conversation_id };
   }
 }

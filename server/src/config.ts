@@ -21,14 +21,27 @@ export interface Config {
   taskMaxAttempts: number;
   maxCostPerExecution: number;
   maxCostPerDay: number;
+  maxCostPerTask: number;
+  maxRecoveries: number;
   authorizedDirs: string[];
   enablePlaywrightMcp: boolean;
+  /** auto = usa o sandbox de SO do SDK quando suportado; required = recusa executar sem; off = desativado (não recomendado). */
+  agentSandbox: 'auto' | 'required' | 'off';
+  allowedHosts: string[];
+  cookieSecure: boolean;
+  backupDir: string;
+  backupIntervalHours: number;
+  backupKeep: number;
+  logDir: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, rootDir = process.cwd()): Config {
   const host = env.MD2_HOST || '127.0.0.1';
   const adminPassword = env.MD2_ADMIN_PASSWORD || '';
   const loopback = ['127.0.0.1', 'localhost', '::1'].includes(host);
+  const dataDir = path.resolve(rootDir, env.MD2_DATA_DIR || './data');
+  const sandbox = (env.MD2_AGENT_SANDBOX || 'auto').toLowerCase();
+  if (!['auto', 'required', 'off'].includes(sandbox)) throw new Error('MD2_AGENT_SANDBOX deve ser auto, required ou off.');
   if (!loopback && !adminPassword) {
     throw new Error(
       `MD2_HOST=${host} expõe o sistema na rede. Defina MD2_ADMIN_PASSWORD antes de iniciar (ou use MD2_HOST=127.0.0.1).`,
@@ -39,7 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, rootDir = proce
     host,
     adminPassword,
     rootDir,
-    dataDir: path.resolve(rootDir, env.MD2_DATA_DIR || './data'),
+    dataDir,
     webDir: path.resolve(rootDir, 'dist/web'),
     modelAlfred: env.MD2_MODEL_ALFRED || undefined,
     modelAgents: env.MD2_MODEL_AGENTS || undefined,
@@ -56,5 +69,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, rootDir = proce
       .filter(Boolean)
       .map((p) => path.resolve(p)),
     enablePlaywrightMcp: env.MD2_ENABLE_PLAYWRIGHT_MCP === '1',
+    maxCostPerTask: num(env.MD2_MAX_COST_USD_PER_TASK, 5),
+    maxRecoveries: num(env.MD2_MAX_RECOVERIES, 2),
+    agentSandbox: sandbox as Config['agentSandbox'],
+    allowedHosts: (env.MD2_ALLOWED_HOSTS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    cookieSecure: env.MD2_COOKIE_SECURE === '1',
+    backupDir: path.resolve(rootDir, env.MD2_BACKUP_DIR || './backups'),
+    backupIntervalHours: num(env.MD2_BACKUP_INTERVAL_HOURS, 6),
+    backupKeep: Math.max(2, num(env.MD2_BACKUP_KEEP, 14)),
+    logDir: path.resolve(rootDir, env.MD2_LOG_DIR || path.join(env.MD2_DATA_DIR || './data', 'logs')),
   };
 }

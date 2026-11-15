@@ -14,12 +14,13 @@ export type TaskStatus = 'pendente' | 'executando' | 'concluida' | 'falhou' | 'c
 export interface ExecutionRow {
   id: string; conversation_id: string; request: string; status: ExecutionStatus;
   objective: string | null; plan: string | null; summary: string | null; error: string | null;
-  cost_usd: number; correction_rounds: number; created_at: string; updated_at: string; finished_at: string | null;
+  cost_usd: number; correction_rounds: number; recoveries: number; created_at: string; updated_at: string; finished_at: string | null;
 }
 export interface TaskRow {
   id: string; execution_id: string; key: string; agent_id: string; title: string; instructions: string;
   depends_on: string; skills: string; status: TaskStatus; attempt: number; result: string | null;
   error: string | null; session_id: string | null; cost_usd: number; started_at: string | null; finished_at: string | null;
+  turns: number; input_tokens: number; output_tokens: number; cache_read_tokens: number; interruptions: number;
 }
 export interface EventRow {
   id: number; execution_id: string | null; task_id: string | null; agent_id: string | null;
@@ -71,6 +72,22 @@ export class Db {
     this.sql = new DatabaseSync(file);
     this.sql.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     this.sql.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /** Migrações aditivas e idempotentes: só acrescentam colunas; nunca removem nem reescrevem dados. */
+  private migrate() {
+    const add = (table: string, column: string, ddl: string) => {
+      const cols = this.sql.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === column)) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+    };
+    add('executions', 'recoveries', 'INTEGER NOT NULL DEFAULT 0');
+    add('tasks', 'turns', 'INTEGER NOT NULL DEFAULT 0');
+    add('tasks', 'input_tokens', 'INTEGER NOT NULL DEFAULT 0');
+    add('tasks', 'output_tokens', 'INTEGER NOT NULL DEFAULT 0');
+    add('tasks', 'cache_read_tokens', 'INTEGER NOT NULL DEFAULT 0');
+    add('tasks', 'interruptions', 'INTEGER NOT NULL DEFAULT 0');
+    this.sql.exec('CREATE INDEX IF NOT EXISTS tasks_exec ON tasks(execution_id); CREATE INDEX IF NOT EXISTS executions_created ON executions(created_at);');
   }
   all<T>(q: string, p: Params = {}): T[] {
     return this.sql.prepare(q).all(p) as T[];
