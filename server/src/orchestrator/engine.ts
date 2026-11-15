@@ -561,7 +561,7 @@ export class Engine {
         onActivity: (a) => {
           if (a.kind === 'sessao') db.update('tasks', t.id, { session_id: a.sessionId ?? null });
           else if (a.kind === 'bloqueio') {
-            db.audit(`agente:${agent.id}`, 'guard_bloqueio', { executionId: e.id, taskId: t.id, tool: a.tool, motivo: a.message });
+            db.audit(`agente:${agent.id}`, 'guard_bloqueio', { executionId: e.id, taskId: t.id, tool: a.tool, motivo: a.message, alvo: a.detail });
             bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: 'seguranca', message: a.message, data: { tool: a.tool } });
           } else bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: a.kind === 'ferramenta' ? 'atividade' : 'log', message: a.message, data: a.tool ? { tool: a.tool } : undefined });
         },

@@ -1,10 +1,12 @@
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Config } from '../config.js';
-import { log } from '../logger.js';
+import { log, redact } from '../logger.js';
 import { agentEnv, checkToolUse } from './guard.js';
 import type { SandboxStatus } from './sandbox.js';
 import { buildSandbox, detectSandbox } from './sandbox.js';
@@ -186,11 +188,12 @@ export class ClaudeAgentRuntime implements AgentRuntime {
 
   async runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
     const ctx = { workspace: opts.cwd, readDirs: opts.readDirs };
-    const tmp = path.join(opts.cwd, '.tmp');
-    fs.mkdirSync(tmp, { recursive: true });
+    // Diretório temporário curto e próprio da conversa. Não pode ficar dentro do workspace: caminhos
+    // longos estouram o limite de ~108 caracteres de sockets Unix (o Chrome headless do QA não sobe).
+    const tmp = path.join(os.tmpdir(), `md2-${createHash('sha256').update(opts.cwd).digest('hex').slice(0, 10)}`);
+    fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
     const sb = this.sandboxState;
     const options: Options = {
-      // TMPDIR dentro do workspace: arquivos temporários de uma tarefa não ficam visíveis para outras.
       ...this.base(opts.signal, opts.model, { TMPDIR: tmp, TMP: tmp, TEMP: tmp }),
       cwd: opts.cwd,
       additionalDirectories: opts.readDirs,
@@ -212,7 +215,8 @@ export class ClaudeAgentRuntime implements AgentRuntime {
       canUseTool: async (toolName, input) => {
         const d = checkToolUse(toolName, input, ctx);
         if (d.allow) return { behavior: 'allow', updatedInput: input };
-        opts.onActivity({ kind: 'bloqueio', tool: toolName, message: `Bloqueado pelo guard de segurança: ${d.reason}` });
+        const what = redact(String(input.command ?? input.file_path ?? input.url ?? input.host ?? input.path ?? '').slice(0, 300));
+        opts.onActivity({ kind: 'bloqueio', tool: toolName, message: `Bloqueado pelo guard de segurança: ${d.reason}`, detail: what });
         return { behavior: 'deny', message: `Ação bloqueada pela política de segurança da MD2: ${d.reason}. Siga por outro caminho dentro do workspace ou solicite aprovação.` };
       },
     };

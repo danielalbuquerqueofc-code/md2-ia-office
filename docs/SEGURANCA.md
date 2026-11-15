@@ -35,7 +35,7 @@ Cada tarefa é uma sessão independente do Claude Agent SDK com:
    - comandos fora do sandbox proibidos (`allowUnsandboxedCommands: false`);
    - acesso de rede de um comando passa pelo guard (`SandboxNetworkAccess`): hosts internos (127.0.0.1, 10.x, 192.168.x, 169.254.x…) são negados.
 2. **Guard de permissões** (`guard.ts`) para as ferramentas que rodam no processo do runtime (Read, Write, Edit, Glob, Grep, WebFetch): escrita só no workspace, leitura só no workspace e pastas autorizadas, caminho real resolvido (links simbólicos), rede interna bloqueada, ferramentas fora da lista negadas. Cada bloqueio vira evento de segurança e entrada de auditoria.
-3. **Ambiente limpo**: segredos de integração (`MD2_*`, `GITHUB_TOKEN`, `GOOGLE_OAUTH_*`, `INSTAGRAM_*`…) removidos do ambiente do agente; `TMPDIR` aponta para `.tmp/` dentro do workspace.
+3. **Ambiente limpo**: segredos de integração (`MD2_*`, `GITHUB_TOKEN`, `GOOGLE_OAUTH_*`, `INSTAGRAM_*`…) removidos do ambiente do agente; `TMPDIR` aponta para um diretório curto e próprio da conversa (`/tmp/md2-<id>`, modo 0700). Não fica dentro do workspace porque caminhos longos estouram o limite de sockets Unix — problema observado no teste real, em que o Chrome do QA não subia.
 4. **Ações externas só com aprovação humana** (`solicitar_aprovacao`); nenhum conector externo executa ações nesta versão.
 
 ### Evidência do sandbox (teste real com o SDK, 15/11/2026)
@@ -55,7 +55,7 @@ Configuração: `MD2_AGENT_SANDBOX=auto` (padrão: ativa quando suportado e avis
 
 ### Riscos de isolamento que continuam abertos
 
-- **`/tmp` continua gravável** dentro do sandbox (padrão do SDK). Mitigação: `TMPDIR` dentro do workspace; um comando que escreva explicitamente em `/tmp` ainda pode deixar arquivos visíveis para outra tarefa.
+- **`/tmp` continua gravável** dentro do sandbox (padrão do SDK). Mitigação: `TMPDIR` próprio por conversa; um comando que escreva explicitamente em `/tmp` ainda pode deixar arquivos visíveis para outra tarefa.
 - **Ferramentas de arquivo do runtime (Read/Write/Edit) não passam pelo sandbox de SO**, só pelo guard. O guard foi endurecido (caminho real) e testado, mas é controle de aplicação.
 - **Validado só no Linux.** macOS e Windows constam como "não verificado"; em `auto`, sem suporte confirmado, o sistema avisa na interface e roda só com o guard.
 - **O processo servidor em si não é isolado.** Para operação exposta à internet, rode-o em contêiner ou usuário dedicado. Exemplo de unidade systemd com endurecimento (fornecido como referência, **não testado** neste ambiente, que não tem systemd nem daemon Docker):

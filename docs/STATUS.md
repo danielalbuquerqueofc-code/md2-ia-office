@@ -1,48 +1,67 @@
 # Status — MD2 IA Office 2.0
 
-Atualizado em 15/11/2026. Branch: `claude/md2-ia-office-reformulacao-ktmyv0`. **Não está pronto para produção exposta à internet** (ver "Antes de operar comercialmente"). Está pronto para uso pelo operador em máquina própria ou servidor privado.
+Atualizado em 15/11/2026, após a operação noturna de consolidação. Branch: `claude/md2-ia-office-reformulacao-ktmyv0`. A `main` não foi alterada; não houve merge, deploy nem publicação.
 
-## Testes executados
+**Situação:** pronto para uso pelo operador em máquina própria ou servidor privado Linux, com isolamento dos agentes, backup e recuperação testados. **Ainda não está pronto para operação comercial exposta à internet** (ver "Riscos abertos" e "Antes de operar comercialmente"). Relatório detalhado da noite: `docs/RELATORIO_OPERACAO_NOTURNA.md`.
+
+## Testes automatizados
 
 | Tipo | Comando | Resultado |
 |---|---|---|
 | Tipagem (servidor e interface) | `npm run typecheck` | Passou |
-| Unitários e integração (35) | `npm test` | 35/35 passaram |
+| Unitários e integração | `npm test` | 63/63 passaram (7 arquivos) |
 | Interface E2E — login, 9 telas × desktop/celular/tablet, rolagem horizontal, erros de console, 22 agentes | `npm run e2e` | 39/39 verificações passaram |
 | Build de produção | `npm run build` | Passou |
+| Dependências vulneráveis | `npm audit` | 0 vulnerabilidades (antes: 3, sendo 2 críticas, em dependências de desenvolvimento) |
 
-Cobertura dos testes automatizados (runtime substituído pelo dublê `FakeRuntime`, identificado e restrito a `server/test`): resposta direta sem tarefas; paralelismo real com dependências; retentativa após falha; cancelamento de dependentes; execução marcada como falha quando nada conclui; rodada de correção pedida por Alfred; aprovação humana; retomada após queda sem refazer tarefas concluídas; idempotência por `clientRequestId`; teto de custo por execução; timeout por tarefa; runtime indisponível sem simulação; replanejamento quando Alfred escolhe agente inexistente; cancelamento; versionamento de entregáveis e ajuste como nova execução; guard de segurança (escrita, leitura, comandos bloqueados, rede interna, segredos); autenticação, CSRF, upload, path traversal, CSP sandbox, SSE e auditoria pela API.
+O runtime é substituído pelo dublê `FakeRuntime` apenas nesses testes (restrito a `server/test`). Cobertura acrescentada na operação noturna: sandbox (detecção e configuração), links simbólicos, rede do sandbox, credenciais no shell, mascaramento de segredos nos logs, backup/verificação/corrupção/retenção/restauração, recuperação com limites, custo de sessão retomada, limite por tarefa, uso de tokens, auditoria de bloqueios, anexos com nome repetido, ajuste duplicado, pausa por limite de uso da conta, Host/Origin, URL malformada, health público × detalhado, custos e backups pela API.
 
 ## Execuções reais (Claude Agent SDK, sem dublê)
 
-| Pedido | Plano criado por Alfred | Resultado | Tempo | Custo |
-|---|---|---|---|---|
-| Proposta comercial de tráfego pago para uma padaria | 1 tarefa (Rafael) | Proposta HTML A4 + notas de revisão; nada inventado, lacunas marcadas `[A CONFIRMAR]`; premissa ambígua (honorário × verba) sinalizada | 3 min | US$ 0,70 |
-| **Fluxo B** — "encontre a pasta Pão de Mel no meu notebook… produza um Reels de 30 s" | 3 tarefas encadeadas (Leonardo → Isabela → Diego) | Pasta localizada na pasta autorizada; inventário com ffprobe e análise visual de quadros; roteiro técnico; **MP4 real 1080x1920, 30 fps, H.264+AAC, 30,0 s** (verificado de forma independente); capa, legenda, script FFmpeg reprodutível; QA encontrou e corrigiu 2 defeitos reais (cortes 1 quadro atrasados, fade final) e gerou a v2 | 13 min | US$ 2,36 |
-| **Fluxo A** — site profissional para uma oficina mecânica (briefing + logo, sem links) | 6 tarefas (Mariana → Beatriz → Pedro ∥ Camila → Bruno → Diego) | Pesquisa com concorrentes reais da cidade; estratégia; textos; especificação de UI; **site estático completo** (SEO, Open Graph, JSON-LD, robots, sitemap, 17 links de WhatsApp por serviço, menu móvel, animações com fallback sem JS); sem erros de console, sem rolagem horizontal, um `h1`, todas as imagens com `alt` (verificado de forma independente); avaliações, mapa e endereço deixados como espaços reservados explícitos em vez de inventados | 34 min | US$ 9,22 |
+Roteiro `e2e/real-operation.mjs`: servidor real, pedido pela API, sem navegador.
 
-Observação honesta: no fluxo B, o material de entrada era **sintético** (clipes e fotos gerados por FFmpeg com rótulos), porque não há material real do cliente neste ambiente. O agente percebeu e relatou isso. O pipeline (localizar, analisar, roteirizar, editar, exportar, validar) é real; a qualidade estética final depende do material real.
+| Teste | O que foi verificado | Resultado | Custo |
+|---|---|---|---|
+| **Queda e retomada** — proposta comercial + plano de mídia em paralelo, com pedido de envio | Servidor derrubado com `SIGKILL` com 2 tarefas em paralelo; reinício; retomada das sessões salvas; 3 tarefas concluídas; 2 entregáveis com prévia; 2 pedidos de aprovação abertos pelos agentes (envio de proposta e gasto); aprovação registrada **sem executar nada**; segunda decisão recusada; auditoria; reenvio duplicado ignorado | **17/18** — a verificação reprovada foi "sandbox ativo": este teste rodou antes da correção da detecção do socat | US$ 1,61 |
+| **Landing page com sandbox ativo** | Bruno construiu, Diego testou em 4 larguras com Chrome headless, corrigiu e gerou v2 + laudo; prévia servida | **11/12** — reprovada só "tarefas em paralelo", não aplicável (plano sequencial) | US$ 1,54 |
+| **Reels com sandbox ativo e pasta autorizada** | ver `docs/RELATORIO_OPERACAO_NOTURNA.md` | ver relatório | ver relatório |
+| Landing page e Reels (primeira tentativa) | A conta Claude atingiu o limite de uso de 5 horas no meio. O sistema registrou as falhas, cancelou dependentes e não marcou nada como entregue. **Falharam** — e motivaram a pausa automática por limite de conta | Falharam (causa externa) | US$ 0,54 |
+
+Execuções da etapa anterior (antes do sandbox), mantidas como referência: proposta (US$ 0,70), site completo com 6 agentes (US$ 9,22), Reels (US$ 2,36).
+
+### O que NÃO foi validado
+
+- **Edição de vídeo com filmagens reais.** Todos os testes de Reels usaram material sintético gerado por FFmpeg. Não há vídeo real no ambiente e a política de rede bloqueia acervos públicos. O pipeline (localizar, inspecionar, roteirizar, cortar, exportar, validar) é real; a qualidade com material de cliente não foi medida.
+- **Site completo (6 agentes) com sandbox ativo**: validado com sandbox apenas na landing page (2 agentes).
+- Sandbox em macOS e Windows; Playwright MCP usado por um agente; transcrição por whisper.
+
+## Riscos abertos
+
+1. Processo servidor não isolado (contêiner/usuário dedicado recomendados; não testados aqui).
+2. `/tmp` gravável dentro do sandbox; ferramentas de arquivo do runtime protegidas pelo guard (aplicação), não pelo sandbox.
+3. Usuário único, sem perfis de acesso.
+4. Nenhum conector externo: aprovar não publica nem envia.
+5. Backup no mesmo disco por padrão; configurar `MD2_BACKUP_DIR` externo.
+6. 12 agentes com nome provisório e 21 com função não confirmada contra o cadastro original (`docs/AGENTES.md`).
+7. Limite de uso da conta Claude interrompe o trabalho; o sistema agora pausa e retoma, mas o prazo depende do plano contratado.
 
 ## Pendências que dependem de você
 
 | Item | O que falta |
 |---|---|
-| Credencial do runtime | `ANTHROPIC_API_KEY` no `.env` ou login do Claude Code na máquina que roda o servidor. |
-| Nomes dos 12 agentes provisórios | Cadastro original não estava no repositório. Edite `agents/registry.json` (ver `docs/DIAGNOSTICO.md`). |
-| Pastas locais | Defina `MD2_AUTHORIZED_DIRS` com as pastas de clientes que os agentes podem ler. |
-| Instagram (publicação e métricas) | Conta profissional + app Meta com `instagram_content_publish` aprovado + `INSTAGRAM_ACCESS_TOKEN` e `INSTAGRAM_BUSINESS_ACCOUNT_ID`. **O conector ainda não foi implementado.** Hoje, aprovar uma publicação registra a decisão, mas não publica. |
-| Google Drive e Calendar | Cliente OAuth no Google Cloud + `GOOGLE_OAUTH_*`. Conector não implementado. |
-| GitHub | `GITHUB_TOKEN`. Push e PR continuam bloqueados pelo guard até existir fluxo de aprovação com execução. |
-| Geração de imagens | Escolher provedor + `IMAGE_GENERATION_API_KEY`. Conector não implementado; os agentes usam imagens do cliente ou composições próprias em CSS/SVG. |
-| Transcrição de fala para legendas | Instalar `openai-whisper` no servidor. Sem ele, as legendas saem do roteiro. |
-| Navegador automatizado (Playwright MCP) | `MD2_ENABLE_PLAYWRIGHT_MCP=1` em máquina com Chromium. Não testado com agentes neste ambiente. |
-| Instagram e Google Maps sem API | Páginas que exigem login podem não ser legíveis pela leitura web; o agente declara a limitação e pede capturas de tela. |
+| Credencial do runtime | `ANTHROPIC_API_KEY` no `.env` ou login do Claude Code na máquina do servidor. |
+| Cadastro original dos agentes | Fornecer nomes e funções reais; editar `agents/registry.json`. |
+| Pastas locais | `MD2_AUTHORIZED_DIRS` com as pastas de clientes. |
+| Material real de vídeo | Uma pasta de cliente para validar a edição. |
+| Local de backup externo | `MD2_BACKUP_DIR` em outro disco ou pasta sincronizada. |
+| Integrações | Credenciais e decisão de prioridade: ver `docs/INTEGRACOES.md`. |
+| Isolamento no servidor de produção | Instalar `bubblewrap` e `socat` e definir `MD2_AGENT_SANDBOX=required`. |
 
 ## Antes de operar comercialmente
 
-1. **Isolamento de execução**: rode o servidor em contêiner ou usuário de sistema dedicado com escrita apenas em `MD2_DATA_DIR`. O guard é defesa em profundidade, não isolamento (ver `docs/ARQUITETURA.md`).
-2. **Conectores de publicação** (Instagram, e-mail, WhatsApp Business) ligados ao Centro de Aprovações, para que "aprovar" execute a ação com registro.
-3. **Multiusuário** (equipe ou clientes acessando): hoje o acesso é de um único administrador.
-4. **Backup** do diretório `data/` (banco + entregáveis) e monitoramento do processo (systemd/pm2 + alerta).
-5. **Hospedagem de prévias** com link compartilhável para o cliente final aprovar (hoje a prévia fica dentro do sistema).
-6. **Calibrar custos e modelos por tipo de tarefa** com base nos custos reais acima (ex.: modelo mais econômico para pesquisa e QA).
+1. Servidor em contêiner ou usuário dedicado, com `MD2_AGENT_SANDBOX=required`, senha, HTTPS e backup externo.
+2. Conector do Instagram (e depois WhatsApp Business) ligado ao centro de aprovações.
+3. Validação da edição de vídeo e do site completo com material real de um cliente.
+4. Link de prévia compartilhável para o cliente final aprovar.
+5. Acesso multiusuário.
+6. Calibração de modelos por tipo de tarefa (pesquisa e QA em modelo mais econômico) com base nos custos medidos.

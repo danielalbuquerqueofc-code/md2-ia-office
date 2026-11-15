@@ -7,6 +7,8 @@ export interface AgentActivity {
   kind: 'texto' | 'ferramenta' | 'sessao' | 'bloqueio';
   message: string;
   tool?: string;
+  /** Em bloqueios: o comando/caminho/host recusado (truncado e com segredos mascarados). */
+  detail?: string;
   sessionId?: string;
 }
 
