@@ -5,7 +5,7 @@ export const SCENARIOS = {
   a: {
     nome: 'Criação de site profissional a partir de Google Maps e Instagram',
     prompt({ maps, instagram, site, briefing, anexos = [] }) {
-      const partes = ['Alfred, crie um site profissional para esta empresa. Analise o Google e o Instagram. Quero um projeto com qualidade comercial de pelo menos R$ 2.000.'];
+      const partes = ['Alfred, crie um site profissional para esta empresa. Analise o Google e o Instagram, identifique as oportunidades comerciais, defina o posicionamento e entregue o site testado. Quero um projeto com qualidade comercial de pelo menos R$ 2.000.'];
       if (maps) partes.push(`Google Maps: ${maps}`);
       if (instagram) partes.push(`Instagram: ${instagram}`);
       if (site) partes.push(`Site atual: ${site}`);

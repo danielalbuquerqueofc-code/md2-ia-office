@@ -60,6 +60,13 @@ describe('sandbox de sistema operacional', () => {
     expect(inPath('socat', dir)).toBe(true);
     expect(inPath('bwrap', dir)).toBe(false);
   });
+  it('no Windows encontra ffmpeg.exe pelo PATHEXT, sem confundir com um arquivo de outro nome', () => {
+    const dir = fs.mkdtempSync(path.join(tmp, 'win-'));
+    fs.writeFileSync(path.join(dir, 'ffmpeg.exe'), '', { mode: 0o755 });
+    expect(inPath('ffmpeg', dir, 'win32')).toBe(true);
+    expect(inPath('ffmpeg', dir, 'linux')).toBe(false);
+    expect(inPath('ffprobe', dir, 'win32')).toBe(false);
+  });
   it('respeita off e required', () => {
     expect(detectSandbox(loadConfig({ MD2_AGENT_SANDBOX: 'off' }, ROOT), () => true, 'linux').active).toBe(false);
     const req = detectSandbox(loadConfig({ MD2_AGENT_SANDBOX: 'required' }, ROOT), () => false, 'linux');

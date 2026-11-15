@@ -11,10 +11,13 @@ export interface SandboxStatus {
 }
 
 /** Procura o executável no PATH (não executa: `socat --version` retorna erro, socat usa `-V`). */
-export const inPath = (bin: string, envPath = process.env.PATH ?? '') =>
-  envPath.split(path.delimiter).filter(Boolean).some((dir) => {
-    try { fs.accessSync(path.join(dir, bin), fs.constants.X_OK); return true; } catch { return false; }
-  });
+export const inPath = (bin: string, envPath = process.env.PATH ?? '', platform: string = process.platform, pathExt = process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM') => {
+  // No Windows o executável é "ffmpeg.exe": tenta cada extensão de PATHEXT.
+  const names = platform === 'win32' ? [bin, ...pathExt.split(';').filter(Boolean).map((e) => bin + e.toLowerCase()), ...pathExt.split(';').filter(Boolean).map((e) => bin + e)] : [bin];
+  return envPath.split(path.delimiter).filter(Boolean).some((dir) => names.some((n) => {
+    try { fs.accessSync(path.join(dir, n), fs.constants.X_OK); return true; } catch { return false; }
+  }));
+};
 
 /**
  * Detecta se o sandbox de sistema operacional do Claude Agent SDK pode rodar aqui.

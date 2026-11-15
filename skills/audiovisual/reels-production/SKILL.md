@@ -4,7 +4,7 @@ title: Roteiro técnico de Reels
 description: Lê o inventário e as folhas de contato do material e escreve o roteiro técnico plano a plano, a legenda e a avaliação honesta do material para um vídeo vertical curto.
 owners: [isabela]
 triggers: [reels, vídeo curto, roteiro de vídeo, legenda de reels, vídeo de 30 segundos]
-inputs: [entregas/video/inventario.md, folhas de contato em trabalho/analise/, tema, duração e identidade da marca]
+inputs: [entregas/video/inventario.md, folhas de contato em entregas/video/quadros/, tema, duração e identidade da marca]
 tools: [arquivos, web, analise_imagem]
 outputs: [entregas/video/roteiro-tecnico.md, entregas/video/legenda.txt]
 ---

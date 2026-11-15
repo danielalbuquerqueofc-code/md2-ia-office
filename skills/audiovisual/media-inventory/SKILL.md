@@ -6,7 +6,7 @@ owners: [diego]
 triggers: [inventariar vídeos, analisar pasta de vídeos, material bruto, achar pasta, selecionar trechos]
 inputs: [nome da pasta ou arquivos em entrada/, pastas locais autorizadas (listadas no pedido), tema e duração do vídeo pretendido]
 tools: [arquivos, shell, ffmpeg, analise_imagem]
-outputs: [entregas/video/inventario.md, trabalho/analise/*.jpg (folhas de contato)]
+outputs: [entregas/video/inventario.md, entregas/video/quadros/*.jpg (folhas de contato)]
 ---
 
 ## Etapas
@@ -23,13 +23,13 @@ outputs: [entregas/video/inventario.md, trabalho/analise/*.jpg (folhas de contat
                if alvo in norm(s): print(os.path.join(d, s))
    PY
    ```
-   Se a pasta pedida não existir nesses locais, **pare** e informe exatamente onde procurou. Não use outro material no lugar.
+   Se a própria pasta autorizada já tiver o nome pedido, use-a. Se a pasta pedida não existir nesses locais, **pare** e informe exatamente onde procurou. Não use outro material no lugar.
 2. Liste os arquivos de vídeo, foto e áudio (por extensão) e leia arquivos de texto da pasta (README, LEIAME) — eles podem dizer que o material é de teste.
 3. Para cada arquivo, rode `ffprobe -v error -print_format json -show_format -show_streams "arquivo"` e registre: duração, resolução, orientação (considere rotação), fps, codec, presença de áudio e as tags de origem (`creation_time`, `make`, `model`, `encoder`, `com.apple.quicktime.*`).
-4. Gere folhas de contato para ver o conteúdo de verdade: `ffmpeg -v error -i "arquivo" -vf "fps=N,scale=320:-2,tile=6x4" -frames:v 1 trabalho/analise/NOME.jpg`, com N calculado para caber ~24 quadros (24 ÷ duração). Abra cada folha com Read.
+4. Gere folhas de contato para ver o conteúdo de verdade: `ffmpeg -v error -i "arquivo" -vf "fps=N,scale=320:-2,tile=6x4" -frames:v 1 entregas/video/quadros/NOME.jpg`, com N calculado para caber ~24 quadros (24 ÷ duração). Abra cada folha com Read e escreva, por arquivo, uma descrição visual curta e factual do que aparece (sem julgar a utilidade para o tema: isso é da roteirista).
 5. Detecte problemas técnicos por arquivo: `blackdetect`, `freezedetect`, `silencedetect`/`volumedetect` e cortes de cena (`select='gt(scene,0.3)',showinfo`). Registre intervalos inutilizáveis.
-6. Escreva `entregas/video/inventario.md`: tabela (caminho absoluto, duração, resolução, orientação, fps, áudio, tags de origem, problemas) e uma seção **Natureza do material** com os fatos observados (tags de câmera presentes ou ausentes, nomes de arquivo, texto sobreposto às imagens, áudio contínuo artificial, LEIAME) e a conclusão **"indícios de material real"** ou **"indícios de material sintético ou de teste"**, sem afirmar mais do que os fatos sustentam.
-7. Registre o inventário com `registrar_entregavel` (categoria documento) e deixe as folhas de contato em `trabalho/analise/` para o roteirista.
+6. Escreva `entregas/video/inventario.md`: tabela (caminho absoluto, duração, resolução, orientação, fps, áudio, tags de origem, descrição visual, problemas) e uma seção **Natureza do material** com os fatos observados (tags de câmera presentes ou ausentes, nomes de arquivo, texto sobreposto às imagens, áudio contínuo artificial, LEIAME) e a conclusão **"indícios de material real"** ou **"indícios de material sintético ou de teste"**, sem afirmar mais do que os fatos sustentam.
+7. Registre o inventário com `registrar_entregavel` (categoria documento) e deixe as folhas de contato em `entregas/video/quadros/` para o roteirista.
 
 ## Validação
 - Todo arquivo da pasta aparece no inventário; ilegíveis constam com o erro do ffprobe.

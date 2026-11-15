@@ -35,6 +35,7 @@ describe('pedidos dos cenários: só o que o usuário informou', () => {
     expect(p).toContain('Google Maps: https://maps.app.goo.gl/x');
     expect(p).not.toMatch(/Instagram:|Site atual:|Informações fornecidas/);
     expect(p).toMatch(/R\$ 2\.000/);
+    expect(p).toMatch(/oportunidades comerciais.*posicionamento/);
     const full = SCENARIOS.a.prompt({ maps: 'm', instagram: 'i', site: 's', briefing: 'atende de segunda a sexta', anexos: ['/x/logo.png'] });
     expect(full).toMatch(/Instagram: i[\s\S]*Site atual: s[\s\S]*logo\.png[\s\S]*atende de segunda a sexta/);
   });
