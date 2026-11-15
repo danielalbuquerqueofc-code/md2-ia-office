@@ -11,7 +11,7 @@ const pedido = args.find((a) => !a.startsWith('--'));
 if (!pedido) { console.error('Informe o pedido.'); process.exit(2); }
 const semQueda = args.includes('--sem-queda');
 const dataDir = path.resolve(args.find((a) => a.startsWith('--dados='))?.slice(8) ?? './data-noturno');
-const port = 4397, base = `http://127.0.0.1:${port}`, senha = 'teste-operacao-noturna';
+const port = Number(args.find((a) => a.startsWith('--porta='))?.slice(8) ?? 4397), base = `http://127.0.0.1:${port}`, senha = 'teste-operacao-noturna';
 const env = { ...process.env, MD2_PORT: String(port), MD2_DATA_DIR: dataDir, MD2_BACKUP_DIR: `${dataDir}-backups`, MD2_ADMIN_PASSWORD: senha };
 const t0 = Date.now();
 const log = (m) => console.log(`[${String(Math.round((Date.now() - t0) / 1000)).padStart(4)}s] ${m}`);

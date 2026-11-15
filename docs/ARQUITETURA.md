@@ -32,14 +32,18 @@ A interface é só uma janela. Toda execução vive no servidor e no banco: fech
 
 | Módulo | Arquivo | Responsabilidade |
 |---|---|---|
-| Configuração | `server/src/config.ts` | Lê `.env`. Recusa expor o serviço na rede sem senha. |
+| Configuração | `server/src/config.ts` | Lê `.env`. Recusa expor o serviço na rede sem senha. Limites de custo, recuperação, sandbox, backup e logs. |
 | Banco | `server/src/db.ts` | SQLite em WAL: conversas, mensagens, execuções, tarefas, eventos, entregáveis e versões, aprovações, uploads, auditoria. |
 | Eventos | `server/src/events.ts` | Todo evento é persistido e transmitido via SSE (com retomada por `Last-Event-ID`). Só ações reais do runtime geram eventos. |
 | Alfred | `server/src/orchestrator/alfred.ts` | Prompts do planejamento e da validação, esquemas JSON e validação estrutural do plano (agentes existentes, dependências, ciclos). |
 | Motor | `server/src/orchestrator/engine.ts` | Ciclo da execução (abaixo), fila com limite de execuções simultâneas, semáforo de tarefas paralelas, custos, aprovações e ajustes. |
 | Entregáveis | `server/src/orchestrator/deliverables.ts` | Snapshot imutável e versionado de cada entrega (arquivo ou site com `index.html`). |
 | Runtime | `server/src/runtime/claudeRuntime.ts` | Integra o **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`): `runStructured` (saída JSON validada por esquema) para Alfred e `runAgent` (sessão completa com ferramentas) para os agentes. |
-| Guard | `server/src/runtime/guard.ts` | Política por chamada de ferramenta (`canUseTool`): escrita só no workspace, leitura só em pastas autorizadas, shell sem comandos destrutivos/publicação/credenciais, rede sem endereços internos. Remove segredos do ambiente do agente. |
+| Guard | `server/src/runtime/guard.ts` | Política por chamada de ferramenta (`canUseTool`): escrita só no workspace, leitura só em pastas autorizadas (caminho real, links simbólicos resolvidos), shell sem comandos destrutivos/publicação/credenciais, rede sem endereços internos (inclusive pedidos de rede do sandbox). Remove segredos do ambiente do agente. |
+| Sandbox | `server/src/runtime/sandbox.ts` | Detecta suporte (Linux: bubblewrap + socat) e monta a configuração do sandbox de SO do SDK por tarefa: escrita só no workspace, leitura de `data/` negada exceto o próprio workspace, credenciais negadas. |
+| Backup | `server/src/backup.ts`, `server/scripts/backup.ts` | Snapshots verificados do SQLite, espelho incremental de arquivos, retenção segura, restauração só em diretório novo. |
+| Monitor | `server/src/monitor.ts` | Health check (público mínimo e detalhado), backup automático, registro de falhas críticas. |
+| Logs | `server/src/logger.ts` | JSON por linha, arquivo diário com retenção, mascaramento de segredos. |
 | Registro de agentes | `agents/registry.json` + `registry/agents.ts` | 22 agentes, 10 departamentos, instruções, limites, qualidade, skills e ferramentas. |
 | Knowledge Engine | `knowledge/<departamento>/*.md` + `registry/knowledge.ts` | Bibliotecas por departamento, recuperação BM25 por seção. |
 | Skill Registry | `skills/<área>/<skill>/SKILL.md` + `registry/skills.ts` | Skills no formato do Claude Code, com frontmatter e seções obrigatórias validadas. |
@@ -52,7 +56,7 @@ A interface é só uma janela. Toda execução vive no servidor e no banco: fech
 1. **Recebido** — mensagem gravada (idempotente por `clientRequestId`), anexos copiados para `workspace/entrada/`.
 2. **Analisando** — verifica limite diário de custo e disponibilidade do runtime; monta contexto (histórico, entregáveis anteriores, árvore do workspace, ferramentas indisponíveis, conhecimento relevante).
 3. **Planejando** — Alfred responde em JSON validado por esquema: `resposta_direta` (pergunta simples, nada é executado) ou `plano` com tarefas, agentes, dependências e skills. Plano inválido é devolvido a Alfred com os erros (até 2 tentativas).
-4. **Delegado / Executando** — tarefas sem dependências pendentes rodam em paralelo (limite `MD2_MAX_PARALLEL_TASKS`). Cada tarefa é uma sessão independente do SDK com: prompt permanente do agente, instruções de Alfred, resultados das dependências, skills atribuídas na íntegra, trechos de conhecimento do departamento e as ferramentas autorizadas. Falha → nova tentativa retomando a sessão anterior (até `MD2_TASK_MAX_ATTEMPTS`); falha definitiva cancela dependentes. Timeout e orçamento por tarefa são aplicados.
+4. **Delegado / Executando** — tarefas sem dependências pendentes rodam em paralelo (limite `MD2_MAX_PARALLEL_TASKS`). Cada tarefa é uma sessão independente do SDK com: prompt permanente do agente, instruções de Alfred, resultados das dependências, skills atribuídas na íntegra, trechos de conhecimento do departamento, as ferramentas autorizadas e o sandbox de SO. Falha → nova tentativa retomando a sessão anterior (até `MD2_TASK_MAX_ATTEMPTS`); falha definitiva cancela dependentes. Timeout por tarefa. Orçamento de cada tentativa = o menor entre o teto por tarefa, o que resta da execução e o que resta do dia; orçamento esgotado cancela as tarefas pendentes com uma única mensagem.
 5. **Validando** — Alfred revisa resultados, entregáveis e aprovações. Pode pedir **uma** rodada de correção a tarefas específicas. Depois escreve a devolutiva fiel aos fatos.
 6. **Concluído / Aguardando aprovação / Falhou** — se algum agente abriu pedido de aprovação, a execução fica aguardando a decisão humana.
 
@@ -62,13 +66,22 @@ A interface é só uma janela. Toda execução vive no servidor e no banco: fech
 - `solicitar_aprovacao` — registra o pedido; o agente é instruído a **não** executar a ação.
 - `consultar_conhecimento` — busca na biblioteca.
 
+## Controle de custos
+
+| Limite | Variável | Padrão | Onde é aplicado |
+|---|---|---|---|
+| Por tarefa | `MD2_MAX_COST_USD_PER_TASK` | US$ 5 | `maxBudgetUsd` da sessão do agente (o SDK interrompe) |
+| Por execução | `MD2_MAX_COST_USD_PER_EXECUTION` | US$ 15 | antes de cada tarefa e como teto da sessão |
+| Por dia | `MD2_MAX_COST_USD_PER_DAY` | US$ 60 | no início da execução e antes de cada tarefa |
+| Chamadas do Alfred | — | até US$ 2 cada | planejamento e validação |
+
+Custo, etapas e tokens são registrados por tarefa (`tasks.cost_usd/turns/input_tokens/output_tokens/cache_read_tokens`); `GET /api/costs` agrega por agente e execução e aponta tarefas acima de 60% do teto, com excesso de etapas ou várias tentativas. Sessões retomadas reportam custo acumulado e só o excedente é contabilizado.
+
 ## Segurança — o que está implementado e o que não está
 
 Implementado e testado: senha obrigatória para expor na rede, cookie `HttpOnly`/`SameSite=Strict` assinado, limite de tentativas de login, cabeçalho anti-CSRF, validação de upload (extensões permitidas, tamanho, nome saneado), bloqueio de path traversal, entregáveis servidos com `Content-Security-Policy: sandbox` (página gerada não acessa a sessão nem a API), guard de ferramentas, remoção de segredos do ambiente dos agentes, regra anti-prompt-injection em todos os prompts, auditoria das decisões humanas, nada publicado/enviado sem aprovação.
 
-Limitações conhecidas:
-- O guard é **defesa em profundidade**, não isolamento. Um comando `Bash` permitido ainda pode escrever em caminhos absolutos fora do workspace (por exemplo, o diretório temporário de sessão que a própria CLI do Claude Code cria em `/tmp/claude-*/…/scratchpad`). Para produção multiusuário ou exposta à internet, rode o servidor em **contêiner ou usuário de sistema dedicado**, com acesso de escrita apenas ao `MD2_DATA_DIR`. O SDK oferece a opção `sandbox` (bubblewrap no Linux); ela não foi ativada porque o bubblewrap não está disponível no ambiente onde o sistema foi testado.
-- Acesso é de usuário único (administrador). Não há perfis nem permissões por usuário.
+Desde a operação noturna de 15/11/2026, os comandos dos agentes rodam no **sandbox de SO do SDK** quando suportado (testado no Linux com bubblewrap). Detalhes, evidências e riscos abertos em `docs/SEGURANCA.md`. Resumo dos riscos abertos: `/tmp` gravável dentro do sandbox, ferramentas de arquivo do runtime protegidas só pelo guard, sandbox não verificado em macOS/Windows, processo servidor não isolado, acesso de usuário único.
 
 ## Decisões técnicas
 

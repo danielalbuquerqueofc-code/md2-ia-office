@@ -6,7 +6,7 @@ Central de comando empresarial. Você conversa com **Alfred**, o diretor de oper
 
 ## Como iniciar
 
-Requisitos: **Node.js 22.13 ou superior** (usa o SQLite nativo do Node) e **FFmpeg** no PATH para o fluxo de vídeo.
+Requisitos: **Node.js 22.13 ou superior** (usa o SQLite nativo do Node), **FFmpeg** no PATH para o fluxo de vídeo e, no Linux, **bubblewrap e socat** para isolar os comandos dos agentes (`sudo apt-get install -y bubblewrap socat`).
 
 ```bash
 npm install
@@ -52,6 +52,11 @@ Para manter o serviço rodando 24 horas, execute `npm start` sob um gerenciador 
 | `MD2_TASK_TIMEOUT_MIN`, `MD2_TASK_MAX_ATTEMPTS` | Tempo limite e tentativas por tarefa | 25 / 2 |
 | `MD2_MODEL_ALFRED`, `MD2_MODEL_AGENTS` | Modelo de cada camada | padrão da conta |
 | `MD2_ENABLE_PLAYWRIGHT_MCP` | Navegador automatizado para pesquisa e QA visual | `0` |
+| `MD2_MAX_COST_USD_PER_TASK` | Teto por tarefa de agente | 5 |
+| `MD2_AGENT_SANDBOX` | Isolamento dos comandos dos agentes: `auto`, `required`, `off` | `auto` |
+| `MD2_MAX_RECOVERIES` | Retomadas automáticas de uma execução após reinício | 2 |
+| `MD2_BACKUP_DIR` / `_INTERVAL_HOURS` / `_KEEP` | Backup automático verificado | `./backups` / 6 / 14 |
+| `MD2_ALLOWED_HOSTS` | Hosts extras aceitos (domínio atrás de proxy) | — |
 
 ## O que o sistema faz hoje
 
@@ -98,5 +103,7 @@ Teste real de ponta a ponta (consome créditos da conta Claude):
 ```bash
 npm run smoke:runtime -- "Alfred, prepare uma proposta comercial para ..."
 ```
+
+Backup e restauração: [docs/BACKUP_E_RECUPERACAO.md](docs/BACKUP_E_RECUPERACAO.md). Segurança: [docs/SEGURANCA.md](docs/SEGURANCA.md). Integrações: [docs/INTEGRACOES.md](docs/INTEGRACOES.md). Agentes: [docs/AGENTES.md](docs/AGENTES.md).
 
 Status detalhado, resultados de testes e pendências: [docs/STATUS.md](docs/STATUS.md). Arquitetura: [docs/ARQUITETURA.md](docs/ARQUITETURA.md). Estado anterior do repositório: [docs/DIAGNOSTICO.md](docs/DIAGNOSTICO.md).
