@@ -40,3 +40,7 @@ playwright-report/
 
 # Local notes (not for commit)
 /notes/
+
+# MD2 IA Office — dados de runtime (banco, workspaces, uploads, entregáveis)
+/data/
+/data-*/
