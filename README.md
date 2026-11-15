@@ -104,6 +104,8 @@ Teste real de ponta a ponta (consome créditos da conta Claude):
 npm run smoke:runtime -- "Alfred, prepare uma proposta comercial para ..."
 ```
 
-Backup e restauração: [docs/BACKUP_E_RECUPERACAO.md](docs/BACKUP_E_RECUPERACAO.md). Segurança: [docs/SEGURANCA.md](docs/SEGURANCA.md). Integrações: [docs/INTEGRACOES.md](docs/INTEGRACOES.md). Agentes: [docs/AGENTES.md](docs/AGENTES.md).
+Backup e restauração: [docs/BACKUP_E_RECUPERACAO.md](docs/BACKUP_E_RECUPERACAO.md). Segurança: [docs/SEGURANCA.md](docs/SEGURANCA.md). Integrações: [docs/INTEGRACOES.md](docs/INTEGRACOES.md). Agentes: [docs/AGENTES.md](docs/AGENTES.md), [originais e confirmados](docs/AGENTES_ORIGINAIS_E_CONFIRMADOS.md), [matriz de competências](docs/MATRIZ_DE_COMPETENCIAS.md). Alfred: [docs/ALFRED_ORQUESTRADOR.md](docs/ALFRED_ORQUESTRADOR.md). Validação com material real: [docs/PLANO_VALIDACAO_REAL.md](docs/PLANO_VALIDACAO_REAL.md). Fase 2: [docs/FASE_2_RELATORIO.md](docs/FASE_2_RELATORIO.md).
+
+Comandos da fase 2 (sem custo, exceto `plan:preview`): `npm run preflight -- --cenario b --pasta "/caminho"` mede o material antes de gastar; `npm run plan:preview -- "<pedido>"` mostra o plano de Alfred sem executar (US$ 0,10 a 0,40); `npm run sandbox:check` testa o isolamento com um agente real (pago).
 
 Status detalhado, resultados de testes e pendências: [docs/STATUS.md](docs/STATUS.md). Arquitetura: [docs/ARQUITETURA.md](docs/ARQUITETURA.md). Estado anterior do repositório: [docs/DIAGNOSTICO.md](docs/DIAGNOSTICO.md).

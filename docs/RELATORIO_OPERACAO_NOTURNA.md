@@ -1,5 +1,7 @@
 # Relatório da operação noturna — 15/11/2026
 
+> **Correção posterior (fase 2).** Este relatório diz em vários pontos que o cadastro original dos agentes não foi encontrado e que 12 nomes eram provisórios. O cadastro foi encontrado depois, em outra branch, e 12 das identidades que eu havia criado estavam erradas. O registro foi corrigido; ver `docs/AGENTES_ORIGINAIS_E_CONFIRMADOS.md` e `docs/FASE_2_RELATORIO.md`. O restante deste relatório (segurança, backup, recuperação, custos) não é afetado.
+
 Fase: consolidação, segurança e autonomia operacional. Branch `claude/md2-ia-office-reformulacao-ktmyv0`. A `main` não foi tocada; não houve merge, deploy, publicação, envio a clientes, gasto em contas externas nem aumento do teto de custos. Nenhum dado, histórico ou entregável foi apagado.
 
 ## 1. O que foi encontrado
@@ -14,7 +16,7 @@ Auditoria completa em `docs/SEGURANCA.md` (15 achados). Os mais relevantes:
 - **Sem backup, sem health check útil, sem logs estruturados.**
 - 3 vulnerabilidades em dependências de desenvolvimento (2 críticas).
 - URL malformada derrubava o tratamento de erros da requisição.
-- 12 agentes com nome provisório, sem distinção formal dos confirmados.
+- 12 agentes com nome provisório (**erro meu, corrigido na fase 2**: o cadastro original existia em outra branch).
 
 Encontrados **durante os testes reais** desta noite (não estavam na auditoria inicial):
 
@@ -80,7 +82,7 @@ Não validado, por bloqueio: **edição de vídeo com filmagens reais** (não h�
 3. Usuário único, sem perfis.
 4. Aprovar não executa nada: não há conectores externos.
 5. Backup no mesmo disco por padrão.
-6. Identidade dos agentes não confirmada (12 nomes provisórios; 21 funções definidas na reformulação).
+6. ~~Identidade dos agentes não confirmada~~ — resolvido na fase 2 (cadastro original recuperado).
 7. Dependência do limite de uso da conta Claude: o sistema pausa e retoma, mas o trabalho para enquanto o limite não volta.
 8. Um bloqueio do guard por "acesso a credenciais" ocorreu no QA da landing page antes de a auditoria guardar o comando; não foi possível confirmar se era falso positivo. Os padrões novos (`_TOKEN`, `API_KEY`, `set |`) são amplos e podem bloquear comandos legítimos; agora o alvo fica registrado para calibrar.
 9. Trilha de auditoria alterável por quem tem acesso ao arquivo do banco.
@@ -93,7 +95,7 @@ Configurada, não testada por agente: Playwright MCP. Parciais: WhatsApp (só li
 
 ## 8. O que depende de aprovação ou ação humana
 
-- Fornecer o cadastro original dos agentes.
+- ~~Fornecer o cadastro original dos agentes~~ (recuperado na fase 2).
 - Definir `MD2_BACKUP_DIR` externo, `MD2_AUTHORIZED_DIRS`, senha e `MD2_AGENT_SANDBOX=required` no servidor de produção (e instalar `bubblewrap` e `socat`).
 - Fornecer uma pasta com filmagens reais para validar a edição.
 - Credenciais e prioridade das integrações (Instagram, WhatsApp Business, Google, GitHub, imagens).
@@ -122,7 +124,7 @@ Observação de consumo: o QA (Diego) é a etapa mais cara nos três fluxos, por
 1. **Validar com material real de um cliente** (uma pasta de vídeos e um site completo) em servidor Linux com `MD2_AGENT_SANDBOX=required`.
 2. **Conector do Instagram ligado ao centro de aprovações** — transforma "aprovar" em ação real e é o maior ganho operacional.
 3. Colocar o servidor em contêiner/usuário dedicado, com HTTPS, senha, backup externo e monitor externo no `/api/health`.
-4. Corrigir o cadastro dos agentes com os dados originais.
+4. ~~Corrigir o cadastro dos agentes~~ (feito na fase 2).
 5. Calibrar modelos por tarefa (QA e pesquisa) com os custos medidos.
 
 ## Evidências

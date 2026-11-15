@@ -9,6 +9,7 @@ Plataforma em que o usuário conversa com Alfred (orquestrador) e 22 agentes exe
 - `npm run smoke:runtime -- "<pedido>" [arquivos]` — execução REAL, consome créditos; usa `./data-smoke`
 - `node e2e/real-operation.mjs "<pedido>" [--sem-queda]` — operação REAL pela API, com queda e retomada do servidor
 - `npm run sandbox:check` — pede a um agente real para tentar violar o isolamento (chamada pequena, paga)
+- `npm run preflight -- --cenario a|b ...` (sem custo: mede material e ambiente; material sintético aborta antes de gastar) · `npm run plan:preview -- "<pedido>"` (prévia do plano de Alfred, pago, conta no limite diário)
 - `npm run backup [-- list | verify all | restore <snapshot> <novo-dir>]` · `npm run docs:agents` (regenera `docs/AGENTES.md`)
 
 ## Mapa
@@ -32,4 +33,6 @@ Plataforma em que o usuário conversa com Alfred (orquestrador) e 22 agentes exe
 - Restauração de backup nunca sobrescreve; retenção nunca deixa menos de 2 snapshots. Migrações de banco são só aditivas (`Db.migrate`).
 - Não aumentar tetos de custo sem pedido explícito do usuário. Erro de limite da conta pausa a execução (`waitForAccount`), não consome tentativa.
 - Segredos só no `.env` (não versionado). Nada sensível vai para o frontend nem para o ambiente dos agentes (`agentEnv`).
+- Identidade dos agentes (id, nome, departamento, cargo) vem do cadastro original (`agents/original-registry.json`, commit `d4e3933`); `agents-identity.test.ts` a protege. Não mude nome/cargo sem evidência; competências novas ficam `proposta_pendente_de_confirmacao`.
+- Cenário B nunca é dado como validado com material sintético; classificação `VALIDADO`/`VALIDADO_COM_RESSALVAS`/`NAO_VALIDADO` vem do executor, não do relato dos agentes.
 - Textos de interface e documentação em português do Brasil.

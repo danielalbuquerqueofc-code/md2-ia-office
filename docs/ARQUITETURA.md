@@ -60,6 +60,10 @@ A interface é só uma janela. Toda execução vive no servidor e no banco: fech
 5. **Validando** — Alfred revisa resultados, entregáveis e aprovações. Pode pedir **uma** rodada de correção a tarefas específicas. Depois escreve a devolutiva fiel aos fatos.
 6. **Concluído / Aguardando aprovação / Falhou** — se algum agente abriu pedido de aprovação, a execução fica aguardando a decisão humana.
 
+## Fase 2: planejamento verificável
+
+Cada tarefa do plano traz `entrega_esperada` e `criterios_de_aceite`. `validatePlan` rejeita duplicidade, skill de outro dono, ciclos e site/vídeo sem QA depois da construção. Ao concluir uma tarefa, `checkOutput` confere o arquivo (existe, não vazio, registrado) e Alfred cobra uma vez retomando a sessão (não consome tentativa). A validação final pode pedir até 4 tarefas extras. `previewPlan` gera o plano sem executar; fica na tabela `previews` e conta no gasto diário. `server/src/preflight.ts` mede material e ambiente antes de qualquer chamada paga.
+
 ## Ferramentas internas dos agentes (MCP em processo `md2`)
 
 - `registrar_entregavel` — único caminho para algo aparecer na Central de Entregáveis. Valida caminho dentro do workspace, existência, tamanho, e cria snapshot.

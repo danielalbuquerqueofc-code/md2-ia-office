@@ -2,21 +2,30 @@
 
 Data da auditoria: 15/11/2026 · Branch: `claude/md2-ia-office-reformulacao-ktmyv0` (criada a partir de `main`, commit `6a85d0e`).
 
+> **CORREÇÃO (fase 2, 15/11/2026).** A primeira versão deste diagnóstico afirmava que o repositório "não continha o MD2 IA Office" e que os 22 agentes "não existiam". **Isso estava errado.** Eu havia inspecionado só a `main` e a branch de trabalho. O trabalho original do MD2 (20 commits de Daniel Albuquerque, 23 a 27/10/2026) existe em branches remotas que eu não abri, incluindo o cadastro dos 22 agentes. Detalhes e evidências: [AGENTES_ORIGINAIS_E_CONFIRMADOS.md](AGENTES_ORIGINAIS_E_CONFIRMADOS.md).
+
 ## O que havia no repositório
 
-O repositório `danielalbuquerqueofc-code/md2-ia-office` era um **fork da extensão de VS Code "Pixel Agents"** (`pablodelucca/pixel-agents`, versão `1.3.0-dev.1`). Não havia nada específico do MD2 IA Office:
+A `main` é um **fork da extensão de VS Code "Pixel Agents"** (`pablodelucca/pixel-agents`, versão `1.3.0-dev.1`). O trabalho do MD2 está em branches separadas, partindo de uma base oficial do Pixel Agents 1.5:
 
-| Item procurado | Resultado |
-|---|---|
-| Alfred | **Não existia.** Nenhuma ocorrência no código. |
-| Os 22 agentes (Carlos, Lucas, Fernanda, Rafael, Helena, Mariana, Beatriz, Gabriel, Pedro, Patrícia…) | **Não existiam.** Nenhum nome, cadastro, prompt ou configuração de agente. |
-| Banco de dados | Nenhum. Persistência só em `workspaceState` do VS Code e arquivos JSON em `~/.pixel-agents/`. |
-| API própria / runtime de agentes | Nenhum. A extensão apenas observa terminais do Claude Code (arquivos JSONL e hooks) e anima personagens. |
-| Integrações (Google, Instagram, FFmpeg, Playwright como ferramenta de agente) | Nenhuma. |
-| Alterações não commitadas | Nenhuma. Árvore limpa. |
-| Branches | `main` e a branch de trabalho (idêntica a `main`). |
+| Branch remota | Conteúdo | Data da ponta |
+|---|---|---|
+| `chore/md2-02a-consolidacao` | A mais completa em lógica: **cadastro dos 22 agentes**, armazenamento persistente com integridade, políticas e aprovações de uso único, entrada de demandas pelo Carlos (determinística), fila persistente, contrato de worker, autenticação de operador, executor, worker Codex somente leitura, piloto comercial interno | 27/10/2026 |
+| `feat/md2-isometric-polish` | Escritório isométrico com sprites animados (visual) | 29/10/2026 |
+| `md2/base-oficial-v1.5`, `feat/md2-*`, `md2/primeira-versao` | Etapas do visual do escritório e da migração para a base oficial | 23/10/2026 |
 
-O que existia e funcionava: escritório em pixel art (canvas, sprites, editor de layout), detecção de status de terminais Claude Code/Codex via hooks e JSONL, servidor HTTP local para hooks, testes Vitest e Playwright da extensão.
+| Item procurado | Na `main` (o que inspecionei) | Nas branches originais (o que deixei de ver) |
+|---|---|---|
+| Alfred | Não existia | **Não existe em nenhuma branch** (nenhuma ocorrência) |
+| Os 22 agentes | Não existiam | **Existem** (`core/src/md2AgentRegistry.ts`, commit `d4e3933`) |
+| Persistência | Só `workspaceState` do VS Code e JSON em `~/.pixel-agents/` | Armazenamento persistente com escopo, integridade e recuperação |
+| Runtime de agentes | Nenhum | Executor com worker Codex somente leitura, fila, concessões e aprovações de uso único; execução real exige autorização separada |
+| Integrações (Google, Instagram, FFmpeg) | Nenhuma | Nenhuma; WhatsApp só planejado |
+| Alterações não commitadas | Nenhuma | — |
+
+A reformulação 2.0 **não reaproveitou** esse código (é TypeScript no estilo do Pixel Agents, ligado ao Codex e ao escritório visual). Ela reaproveitou as **decisões**: capacidades declarativas, aprovações de uso único, escopo, limites e entrada pelo Carlos. Que o código da branch continue disponível para comparação e migração futura.
+
+O que existia na `main` e funcionava: escritório em pixel art (canvas, sprites, editor de layout), detecção de status de terminais Claude Code/Codex via hooks e JSONL, servidor HTTP local para hooks, testes Vitest e Playwright da extensão.
 
 ## Principais problemas frente à visão do produto
 
@@ -36,8 +45,4 @@ Estado encontrado no início da operação noturna (versão 2.0 recém-construí
 
 ## Sobre os 22 agentes
 
-Como o cadastro original não estava no repositório, a estrutura foi recriada exatamente conforme a especificação recebida:
-
-- **Nomes preservados conforme informados (9 + 1 condicional):** Carlos (Direção), Lucas, Fernanda, Rafael (Comercial), Helena (Jurídico), Mariana, Beatriz, Gabriel, Pedro (Marketing); Patrícia (Administrativo), condicional.
-- **Nomes provisórios (12)**, porque a especificação dizia "preservar os agentes existentes" sem informar os nomes: Thiago, Bruno, Camila, Diego (Desenvolvimento); Juliana, Larissa (Atendimento); Roberto, Aline (Financeiro); Marcelo, Vanessa (Operações); Leonardo, Isabela (Produção). Estão marcados com `"nameStatus": "provisorio"` em `agents/registry.json` e sinalizados na interface. Patrícia está como `especificacao_condicional` (a especificação dizia "caso esse seja o nome cadastrado"). Todos, exceto Carlos, têm `"roleStatus": "definido_na_reformulacao"`. Auditoria completa por agente: `docs/AGENTES.md` (gerada por `npm run docs:agents`). **Se você tem o cadastro original, substitua nome e função nesse arquivo** — os `id` podem mudar à vontade, desde que as referências em `skills/*/SKILL.md` (`owners`) acompanhem; o teste `registries.test.ts` aponta qualquer inconsistência.
-- As **funções** dos agentes de Comercial e Marketing também foram definidas por mim (a especificação trazia só os nomes). Ajuste se divergirem do original.
+Substituída pela recuperação feita na fase 2: o registro atual usa os 22 agentes do cadastro original (nome, departamento, cargo, descrição e capacidades confirmados no commit `d4e3933`). As competências que a matriz acrescenta continuam **pendentes de confirmação**. Ver [AGENTES_ORIGINAIS_E_CONFIRMADOS.md](AGENTES_ORIGINAIS_E_CONFIRMADOS.md) e [MATRIZ_DE_COMPETENCIAS.md](MATRIZ_DE_COMPETENCIAS.md).

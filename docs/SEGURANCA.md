@@ -74,6 +74,10 @@ ReadWritePaths=/opt/md2-ia-office/data /opt/md2-ia-office/backups /tmp
 PrivateTmp=yes
 ```
 
+## Plataformas
+
+O isolamento de SO (bubblewrap + socat) só foi validado em **Linux**. No **Windows nativo** ele é indisponível e a validação comercial não vale; use WSL2 (não testado) ou anexe os arquivos pela interface a um servidor Linux. macOS não foi verificado.
+
 ## Autenticação e autorização
 
 - Sem `MD2_ADMIN_PASSWORD`, o servidor só aceita `127.0.0.1`; definir outro host sem senha impede a inicialização.

@@ -95,7 +95,7 @@ Comparação entre o registro da reformulação 2.0 (antes da fase 2) e o origin
 | **Nome certo, cargo errado** | Camila (arquiteta de software, não designer de UX/UI), Diego (analista de automação, não QA/segurança), Isabela (redatora, não editora de vídeo), Pedro (planejador de mídia, não redator), Gabriel (analista de desempenho, não gestor de tráfego), Mariana (estrategista, não pesquisadora), Juliana, Lucas, Fernanda, Rafael, Beatriz (cargo reescrito por mim) |
 | **Corretos desde o início** | Carlos (departamento e cargo), Helena e Patrícia (departamento); o texto do cargo também foi reescrito por mim |
 
-Os agentes de Comercial e Marketing tinham os nomes certos mas funções diferentes das originais; as 10 funções que você me passou no primeiro comando só traziam nomes.
+Comercial e Marketing tinham os nomes certos, mas com funções diferentes das originais. O primeiro comando listava só nomes para essas funções, e eu preenchi as lacunas sem ter consultado o cadastro: foi aí que errei.
 
 ## 6. Situação de cada informação
 

@@ -2,6 +2,8 @@
 
 Atualizado em 15/11/2026, após a operação noturna de consolidação. Branch: `claude/md2-ia-office-reformulacao-ktmyv0`. A `main` não foi alterada; não houve merge, deploy nem publicação.
 
+**Fase 2 (identidade dos agentes e validação comercial):** cadastro original dos 22 agentes recuperado e restaurado no registro; matriz de competências, Alfred reforçado (entrega esperada, critérios de aceite, cobrança, prévia de plano), preflight de material e plano de validação real. **Os cenários A e B ainda NÃO foram validados com material real**; ver `docs/FASE_2_RELATORIO.md` e `docs/PLANO_VALIDACAO_REAL.md`.
+
 **Situação:** pronto para uso pelo operador em máquina própria ou servidor privado Linux, com isolamento dos agentes, backup e recuperação testados. **Ainda não está pronto para operação comercial exposta à internet** (ver "Riscos abertos" e "Antes de operar comercialmente"). Relatório detalhado da noite: `docs/RELATORIO_OPERACAO_NOTURNA.md`.
 
 ## Testes automatizados
@@ -9,7 +11,7 @@ Atualizado em 15/11/2026, após a operação noturna de consolidação. Branch: 
 | Tipo | Comando | Resultado |
 |---|---|---|
 | Tipagem (servidor e interface) | `npm run typecheck` | Passou |
-| Unitários e integração | `npm test` | 63/63 passaram (7 arquivos) |
+| Unitários e integração | `npm test` | 131 passaram na fase 2 (eram 63) |
 | Interface E2E — login, 9 telas × desktop/celular/tablet, rolagem horizontal, erros de console, 22 agentes | `npm run e2e` | 39/39 verificações passaram |
 | Build de produção | `npm run build` | Passou |
 | Dependências vulneráveis | `npm audit` | 0 vulnerabilidades (antes: 3, sendo 2 críticas, em dependências de desenvolvimento) |
@@ -42,7 +44,7 @@ Execuções da etapa anterior (antes do sandbox), mantidas como referência: pro
 3. Usuário único, sem perfis de acesso.
 4. Nenhum conector externo: aprovar não publica nem envia.
 5. Backup no mesmo disco por padrão; configurar `MD2_BACKUP_DIR` externo.
-6. 12 agentes com nome provisório e 21 com função não confirmada contra o cadastro original (`docs/AGENTES.md`).
+6. Identidade dos 22 agentes: **confirmada** no cadastro original (commit `d4e3933`, fase 2). As competências detalhadas (matriz) são **propostas pendentes de confirmação**; há 4 lacunas de papel (editor de vídeo, designer, Fechamento, Cobrança). Ver `docs/AGENTES_ORIGINAIS_E_CONFIRMADOS.md`.
 7. Limite de uso da conta Claude interrompe o trabalho; o sistema agora pausa e retoma, mas o prazo depende do plano contratado.
 
 ## Pendências que dependem de você
