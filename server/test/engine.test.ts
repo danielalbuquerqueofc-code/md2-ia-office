@@ -27,6 +27,7 @@ describe('motor de orquestração (runtime substituído por dublê de teste)', (
       { chave: 'pesquisa', agente: 'mariana', skills: ['market-research'] },
       { chave: 'estrategia', agente: 'beatriz' },
       { chave: 'site', agente: 'andre', depende_de: ['pesquisa', 'estrategia'], skills: ['website-builder'] },
+      { chave: 'qa', agente: 'sofia', depende_de: ['site'], skills: ['quality-assurance'] },
     ]));
     const live = new Set<string>();
     let maxLive = 0;
@@ -50,13 +51,14 @@ describe('motor de orquestração (runtime substituído por dublê de teste)', (
     expect(t.exec(executionId).status).toBe('concluido');
     expect(maxLive).toBe(2);
     expect(order[2]).toBe('site');
-    expect(t.tasks(executionId).map((x) => x.status)).toEqual(['concluida', 'concluida', 'concluida']);
+    expect(t.tasks(executionId).map((x) => x.status)).toEqual(['concluida', 'concluida', 'concluida', 'concluida']);
+    expect(order.slice(-2)).toEqual(['site', 'qa']);
     const site = t.runtime.agentCalls.find((c) => c.prompt.includes('Tarefa site'))!;
     expect(site.prompt).toContain('resultado de pesquisa');
     expect(site.prompt).toContain('Skill: Construção de site profissional');
     expect(site.sdkTools).toContain('Bash');
     expect(site.system).toContain('Você é André');
-    expect(t.exec(executionId).cost_usd).toBeCloseTo(0.062, 3);
+    expect(t.exec(executionId).cost_usd).toBeCloseTo(0.082, 3);
 
     const msgs = t.events(executionId).map((e) => e.message);
     expect(msgs[0]).toBe('Alfred recebeu a solicitação.');
@@ -103,8 +105,8 @@ describe('motor de orquestração (runtime substituído por dublê de teste)', (
 
   it('Alfred solicita correção após a validação (uma rodada)', async () => {
     t.runtime.plans.push(plan([{ chave: 'copy', agente: 'pedro' }]));
-    t.runtime.reviews.push({ aprovado: false, correcoes: [{ chave: 'copy', instrucoes: 'Faltou a chamada para ação.' }], resposta_final: '' },
-      { aprovado: true, correcoes: [], resposta_final: 'Texto pronto.' });
+    t.runtime.reviews.push({ aprovado: false, correcoes: [{ chave: 'copy', instrucoes: 'Faltou a chamada para ação.' }], novas_tarefas: [], resposta_final: '' },
+      { aprovado: true, correcoes: [], novas_tarefas: [], resposta_final: 'Texto pronto.' });
     const { executionId } = t.engine.submit({ text: 'Escreva a copy' });
     await t.engine.whenIdle();
     expect(t.runtime.agentCalls).toHaveLength(2);

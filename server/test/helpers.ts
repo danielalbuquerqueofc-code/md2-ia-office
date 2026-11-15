@@ -37,7 +37,7 @@ export class FakeRuntime implements AgentRuntime {
   async runStructured<T>(o: RunStructuredOptions) {
     this.structuredCalls.push(o);
     const isPlan = 'modo' in (o.schema as { properties: Record<string, unknown> }).properties;
-    const data = isPlan ? this.plans.shift() : (this.reviews.shift() ?? { aprovado: true, correcoes: [], resposta_final: 'Entrega consolidada.' });
+    const data = isPlan ? this.plans.shift() : (this.reviews.shift() ?? { aprovado: true, correcoes: [], novas_tarefas: [], resposta_final: 'Entrega consolidada.' });
     if (!data) throw new Error('FakeRuntime: sem plano roteirizado');
     return { data: data as T, costUsd: 0.001 };
   }
@@ -50,7 +50,7 @@ export class FakeRuntime implements AgentRuntime {
 export function plan(tarefas: Array<Partial<Plan['tarefas'][number]> & { chave: string; agente: string }>): Plan {
   return {
     modo: 'plano', titulo: 'Teste', objetivo: 'Objetivo de teste', resposta: 'Vou executar.',
-    tarefas: tarefas.map((t) => ({ titulo: `Tarefa ${t.chave}`, instrucoes: 'Faça.', depende_de: [], skills: [], ...t })),
+    tarefas: tarefas.map((t) => ({ titulo: `Tarefa ${t.chave}`, instrucoes: 'Faça.', depende_de: [], skills: [], entrega_esperada: '', criterios_de_aceite: ['Entrega o pedido'], ...t })),
   };
 }
 

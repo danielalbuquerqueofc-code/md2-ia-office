@@ -57,7 +57,8 @@ export class KnowledgeEngine {
     this.avgLen = this.chunks.reduce((s, c) => s + c.length, 0) / Math.max(1, this.chunks.length);
   }
 
-  search(query: string, opts: { departments?: string[]; limit?: number } = {}): KnowledgeHit[] {
+  /** `boost`: ids de documentos do especialista; ganham 60% de peso na ordenação (sem excluir os demais do departamento). */
+  search(query: string, opts: { departments?: string[]; limit?: number; boost?: string[] } = {}): KnowledgeHit[] {
     const q = [...new Set(tokenize(query))];
     const N = this.chunks.length;
     const k1 = 1.4, b = 0.75;
@@ -71,6 +72,7 @@ export class KnowledgeEngine {
           const idf = Math.log(1 + (N - (this.df.get(t) ?? 0) + 0.5) / ((this.df.get(t) ?? 0) + 0.5));
           score += (idf * tf * (k1 + 1)) / (tf + k1 * (1 - b + (b * c.length) / this.avgLen));
         }
+        if (opts.boost?.includes(c.docId)) score *= 1.6;
         return { docId: c.docId, department: c.department, title: c.title, heading: c.heading, text: c.text, score };
       })
       .filter((h) => h.score > 0)
@@ -81,9 +83,9 @@ export class KnowledgeEngine {
   get(id: string) { return this.docs.find((d) => d.id === id); }
 
   /** Trechos prontos para compor o contexto de um agente, respeitando um teto de caracteres. */
-  context(query: string, departments: string[], maxChars = 9000): string {
+  context(query: string, departments: string[], maxChars = 9000, boost: string[] = []): string {
     let out = '';
-    for (const h of this.search(query, { departments, limit: 8 })) {
+    for (const h of this.search(query, { departments, limit: 8, boost })) {
       const block = `### [${h.docId}] ${h.title} — ${h.heading}\n${h.text}\n\n`;
       if (out.length + block.length > maxChars) break;
       out += block;

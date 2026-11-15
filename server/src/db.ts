@@ -21,6 +21,7 @@ export interface TaskRow {
   depends_on: string; skills: string; status: TaskStatus; attempt: number; result: string | null;
   error: string | null; session_id: string | null; cost_usd: number; started_at: string | null; finished_at: string | null;
   turns: number; input_tokens: number; output_tokens: number; cache_read_tokens: number; interruptions: number;
+  expected_output: string | null; acceptance: string; cobrancas: number; check_note: string | null;
 }
 export interface EventRow {
   id: number; execution_id: string | null; task_id: string | null; agent_id: string | null;
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS approvals (
   description TEXT NOT NULL, payload TEXT, status TEXT NOT NULL, outcome TEXT, decision_note TEXT,
   created_at TEXT NOT NULL, decided_at TEXT);
 CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY, name TEXT NOT NULL, rel_path TEXT NOT NULL, size INTEGER NOT NULL, mime TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS previews (id TEXT PRIMARY KEY, request TEXT NOT NULL, plan TEXT, errors TEXT, cost_usd REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL);
 `;
 
@@ -87,6 +89,10 @@ export class Db {
     add('tasks', 'output_tokens', 'INTEGER NOT NULL DEFAULT 0');
     add('tasks', 'cache_read_tokens', 'INTEGER NOT NULL DEFAULT 0');
     add('tasks', 'interruptions', 'INTEGER NOT NULL DEFAULT 0');
+    add('tasks', 'expected_output', 'TEXT');
+    add('tasks', 'acceptance', "TEXT NOT NULL DEFAULT '[]'");
+    add('tasks', 'cobrancas', 'INTEGER NOT NULL DEFAULT 0');
+    add('tasks', 'check_note', 'TEXT');
     this.sql.exec('CREATE INDEX IF NOT EXISTS tasks_exec ON tasks(execution_id); CREATE INDEX IF NOT EXISTS executions_created ON executions(created_at);');
   }
   all<T>(q: string, p: Params = {}): T[] {

@@ -13,7 +13,7 @@ import { log } from '../logger.js';
 import type { AgentRuntime, AgentToolHandlers, Usage } from '../runtime/types.js';
 import { RuntimeError } from '../runtime/types.js';
 import type { Plan, Review } from './alfred.js';
-import { alfredSystem, INJECTION_RULE, PLAN_SCHEMA, REVIEW_SCHEMA, reviewSystem, validatePlan } from './alfred.js';
+import { alfredSystem, INJECTION_RULE, PLAN_SCHEMA, REVIEW_SCHEMA, reviewSystem, validateExtraTasks, validatePlan } from './alfred.js';
 import type { Deliverables } from './deliverables.js';
 
 export interface Services {
@@ -232,8 +232,12 @@ export class Engine {
   private addCost(executionId: string, usd: number) {
     if (usd > 0) this.s.db.run('UPDATE executions SET cost_usd = cost_usd + :c WHERE id = :id', { c: usd, id: executionId });
   }
+  /** Gasto do dia: execuções + prévias de plano (também custam). */
   private spentToday() {
-    return this.s.db.get<{ c: number }>(`SELECT COALESCE(SUM(cost_usd),0) AS c FROM executions WHERE created_at >= :d`, { d: now().slice(0, 10) })?.c ?? 0;
+    const d = now().slice(0, 10);
+    const ex = this.s.db.get<{ c: number }>(`SELECT COALESCE(SUM(cost_usd),0) AS c FROM executions WHERE created_at >= :d`, { d })?.c ?? 0;
+    const pv = this.s.db.get<{ c: number }>(`SELECT COALESCE(SUM(cost_usd),0) AS c FROM previews WHERE created_at >= :d`, { d })?.c ?? 0;
+    return ex + pv;
   }
 
   private fail(id: string, err: unknown) {
@@ -278,6 +282,7 @@ export class Engine {
         this.s.db.insert('tasks', {
           id: newId(), execution_id: id, key: t.chave, agent_id: t.agente, title: t.titulo, instructions: t.instrucoes,
           depends_on: JSON.stringify(t.depende_de), skills: JSON.stringify(t.skills), status: 'pendente',
+          expected_output: t.entrega_esperada?.trim() || null, acceptance: JSON.stringify(t.criterios_de_aceite ?? []),
         });
       }
       this.s.bus.emit({ executionId: id, type: 'plano', message: `Plano definido: ${plan.tarefas.length} tarefa(s). ${plan.resposta}`, data: { objetivo: plan.objetivo } });
@@ -297,8 +302,20 @@ export class Engine {
       const review = await this.review(e, signal);
       if (signal.aborted) return;
       const fixable = review.correcoes.filter((c) => this.tasks(id).some((t) => t.key === c.chave));
-      if (!review.aprovado && fixable.length && e.correction_rounds < 1) {
+      const extra = e.correction_rounds < 1
+        ? validateExtraTasks(review.novas_tarefas ?? [], new Set(this.tasks(id).map((t) => t.key)), this.s.agents, this.s.skills)
+        : { accepted: [], rejected: (review.novas_tarefas ?? []).map((t) => `${t.chave}: sem rodada disponível`) };
+      for (const r of extra.rejected) this.s.bus.emit({ executionId: id, type: 'log', message: `Alfred descartou uma tarefa extra: ${r}` });
+      if ((fixable.length || extra.accepted.length) && e.correction_rounds < 1 && (!review.aprovado || extra.accepted.length)) {
         this.s.db.update('executions', id, { correction_rounds: e.correction_rounds + 1 });
+        for (const t of extra.accepted) {
+          this.s.db.insert('tasks', {
+            id: newId(), execution_id: id, key: t.chave, agent_id: t.agente, title: t.titulo, instructions: t.instrucoes,
+            depends_on: JSON.stringify(t.depende_de), skills: JSON.stringify(t.skills), status: 'pendente',
+            expected_output: t.entrega_esperada?.trim() || null, acceptance: JSON.stringify(t.criterios_de_aceite),
+          });
+          this.s.bus.emit({ executionId: id, agentId: t.agente, type: 'tarefa', message: `Alfred acionou ${this.s.agents.get(t.agente)?.name} (pedido de outro agente ou da validação): ${t.titulo}` });
+        }
         for (const c of fixable) {
           const t = this.tasks(id).find((x) => x.key === c.chave)!;
           this.s.db.update('tasks', t.id, {
@@ -319,12 +336,13 @@ export class Engine {
     }
   }
 
-  private conversationContext(e: ExecutionRow) {
+  private conversationContext(conversationId: string | null, excludeExecutionId: string | null) {
+    if (!conversationId) return { history: '', tree: [] as string[], delivered: [] as string[], ws: '' };
     const msgs = this.s.db
-      .all<{ role: string; content: string }>('SELECT role, content FROM messages WHERE conversation_id = :c AND (execution_id IS NULL OR execution_id != :e) ORDER BY created_at DESC LIMIT 10', { c: e.conversation_id, e: e.id })
+      .all<{ role: string; content: string }>('SELECT role, content FROM messages WHERE conversation_id = :c AND (execution_id IS NULL OR execution_id != :e) ORDER BY created_at DESC LIMIT 10', { c: conversationId, e: excludeExecutionId ?? '' })
       .reverse();
     const history = msgs.map((m) => `${m.role === 'user' ? 'Usuário' : 'Alfred'}: ${clip(m.content, 1500)}`).join('\n\n');
-    const ws = this.workspace(e.conversation_id);
+    const ws = this.workspace(conversationId);
     const tree: string[] = [];
     const walk = (dir: string, depth: number) => {
       if (depth > 2 || tree.length > 80) return;
@@ -336,40 +354,123 @@ export class Engine {
       }
     };
     walk(ws, 0);
-    const delivered = this.s.deliverables.list({ conversationId: e.conversation_id }).map((d) => `- ${d.name} (${d.category}, v${d.versions[0]?.version ?? 1}, ${d.status})`);
+    const delivered = this.s.deliverables.list({ conversationId }).map((d) => `- ${d.name} (${d.category}, v${d.versions[0]?.version ?? 1}, ${d.status})`);
     return { history, tree, delivered, ws };
   }
 
-  private async plan(e: ExecutionRow, signal: AbortSignal): Promise<Plan> {
-    this.setStatus(e.id, 'analisando');
-    const ctx = this.conversationContext(e);
-    const hits = this.s.knowledge.search(e.request, { limit: 4 });
-    if (hits.length) this.s.bus.emit({ executionId: e.id, type: 'log', message: `Alfred consultou o conhecimento: ${[...new Set(hits.map((h) => h.docId))].join(', ')}` });
+  /** Nomes do primeiro nível das pastas autorizadas, para o plano casar o pedido ("Pão de Mel") com o nome real da pasta. */
+  private authorizedSection(title: string): string {
+    const dirs = this.s.config.authorizedDirs;
+    if (!dirs.length) return '';
+    const blocks = dirs.map((d) => {
+      try {
+        const ents = fs.readdirSync(d, { withFileTypes: true }).filter((x) => !x.name.startsWith('.'));
+        const names = ents.slice(0, 60).map((x) => (x.isDirectory() ? `${x.name}/` : x.name).slice(0, 120));
+        return `${d}\n  ${names.join('\n  ') || '(vazia)'}${ents.length > 60 ? `\n  … e mais ${ents.length - 60} itens` : ''}`;
+      } catch {
+        return `${d}\n  (não foi possível listar esta pasta)`;
+      }
+    });
+    return `## ${title}\n${blocks.join('\n')}`;
+  }
+
+  /** Verificação objetiva (sem modelo): o arquivo esperado existe, não está vazio e foi registrado como entregável. */
+  private checkOutput(t: TaskRow, ws: string): { ok: boolean; note: string } {
+    if (!t.expected_output) return { ok: true, note: 'sem arquivo esperado (tarefa só de texto)' };
+    const p = path.resolve(ws, t.expected_output);
+    const inside = !path.relative(ws, p).startsWith('..');
+    let present = false, size = 0;
+    try {
+      if (inside) { const st = fs.statSync(p); present = st.isDirectory() ? fs.readdirSync(p).length > 0 : st.size > 0; size = st.isDirectory() ? fs.readdirSync(p).length : st.size; }
+    } catch { /* ausente */ }
+    const registered = (this.s.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM deliverables WHERE task_id = :t', { t: t.id })?.n ?? 0) > 0;
+    const note = [
+      present ? `arquivo esperado presente (${t.expected_output}, ${size} ${fs.existsSync(p) && fs.statSync(p).isDirectory() ? 'itens' : 'bytes'})` : `ARQUIVO ESPERADO AUSENTE OU VAZIO (${t.expected_output})`,
+      registered ? 'entregável registrado' : 'NENHUM entregável registrado por esta tarefa',
+    ].join('; ');
+    return { ok: present && registered, note };
+  }
+
+  private planPrompt(request: string, ctx: { history: string; delivered: string[]; tree: string[] }) {
+    const hits = this.s.knowledge.search(request, { limit: 4 });
     const pending = this.s.tools.tools.filter((t) => t.status !== 'disponivel').map((t) => `- ${t.name}: ${t.detail}`);
     const prompt = [
       ctx.history && `## Conversa até aqui\n${ctx.history}`,
       ctx.delivered.length && `## Entregáveis já registrados nesta conversa\n${ctx.delivered.join('\n')}`,
       ctx.tree.length && `## Arquivos no workspace da conversa\n${ctx.tree.join('\n')}`,
-      this.s.config.authorizedDirs.length ? `## Pastas locais autorizadas para leitura\n${this.s.config.authorizedDirs.join('\n')}` : '## Pastas locais autorizadas para leitura\nNenhuma configurada (MD2_AUTHORIZED_DIRS). Os agentes só acessam arquivos enviados pelo usuário.',
+      this.authorizedSection('Pastas locais autorizadas para leitura (nomes do primeiro nível)')
+        || '## Pastas locais autorizadas para leitura\nNenhuma configurada (MD2_AUTHORIZED_DIRS). Os agentes só acessam arquivos enviados pelo usuário.',
       pending.length && `## Ferramentas NÃO disponíveis agora (não planeje depender delas)\n${pending.join('\n')}`,
       hits.length && `## Conhecimento relevante\n${hits.map((h) => `[${h.docId}] ${h.heading}: ${clip(h.text, 700)}`).join('\n\n')}`,
-      `## Pedido do usuário\n${e.request}`,
+      `## Pedido do usuário\n${request}`,
     ].filter(Boolean).join('\n\n');
+    return { prompt, hits };
+  }
 
-    this.setStatus(e.id, 'planejando');
+  /** Pede o plano ao Alfred e o devolve para refazer (até 2 tentativas) quando a validação o rejeita. */
+  private async planLoop(prompt: string, call: (p: string) => Promise<{ data: Plan; costUsd: number }>, onReject: (errors: string[]) => void) {
     let feedback = '';
+    let last: Plan | undefined;
+    let errors: string[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
-      const { data, costUsd } = await this.alfred<Plan>(e.id, signal, {
-        system: alfredSystem(this.s.agents, this.s.skills), prompt: prompt + feedback, schema: PLAN_SCHEMA, model: this.s.config.modelAlfred, signal,
-        maxBudgetUsd: this.alfredBudget(e.id),
-      });
-      this.addCost(e.id, costUsd);
-      const errors = validatePlan(data, this.s.agents, this.s.skills);
-      if (!errors.length) return data;
-      feedback = `\n\n## Seu plano anterior foi rejeitado pela validação\n${errors.join('; ')}. Corrija e reenvie.`;
-      this.s.bus.emit({ executionId: e.id, type: 'log', message: `Plano rejeitado na validação (${errors.join('; ')}). Alfred está refazendo.` });
+      const { data } = await call(prompt + feedback);
+      last = data;
+      errors = validatePlan(data, this.s.agents, this.s.skills);
+      if (!errors.length) return { plan: data, errors };
+      feedback = `\n\n## Seu plano anterior foi rejeitado pela validação\n${errors.map((x) => `- ${x}`).join('\n')}\nCorrija todos os pontos e reenvie.`;
+      onReject(errors);
     }
-    throw new RuntimeError('Alfred não conseguiu montar um plano válido para este pedido.', false);
+    return { plan: last!, errors };
+  }
+
+  private async plan(e: ExecutionRow, signal: AbortSignal): Promise<Plan> {
+    this.setStatus(e.id, 'analisando');
+    const { prompt, hits } = this.planPrompt(e.request, this.conversationContext(e.conversation_id, e.id));
+    if (hits.length) this.s.bus.emit({ executionId: e.id, type: 'log', message: `Alfred consultou o conhecimento: ${[...new Set(hits.map((h) => h.docId))].join(', ')}` });
+    this.setStatus(e.id, 'planejando');
+    const { plan, errors } = await this.planLoop(
+      prompt,
+      async (p) => {
+        const r = await this.alfred<Plan>(e.id, signal, { system: alfredSystem(this.s.agents, this.s.skills), prompt: p, schema: PLAN_SCHEMA, model: this.s.config.modelAlfred, signal, maxBudgetUsd: this.alfredBudget(e.id) });
+        this.addCost(e.id, r.costUsd);
+        return r;
+      },
+      (errs) => this.s.bus.emit({ executionId: e.id, type: 'log', message: `Plano rejeitado na validação (${errs.join('; ')}). Alfred está refazendo.` }),
+    );
+    if (errors.length) throw new RuntimeError(`Alfred não conseguiu montar um plano válido para este pedido: ${errors.join('; ')}`, false);
+    return plan;
+  }
+
+  /**
+   * Prévia do plano: o Alfred planeja e a validação roda, mas nada é executado nem criado. Custa uma ou duas chamadas
+   * ao Alfred (registradas em `previews` e somadas ao gasto do dia).
+   */
+  async previewPlan(input: { text: string; conversationId?: string }) {
+    const text = input.text.trim();
+    if (!text) throw new Error('Mensagem vazia.');
+    if (text.length > 20_000) throw new Error('Mensagem acima de 20.000 caracteres.');
+    const { config, db } = this.s;
+    if (this.spentToday() >= config.maxCostPerDay) throw new Error(`Limite diário de custo atingido (US$ ${config.maxCostPerDay}).`);
+    const status = await this.s.runtime.status();
+    if (!status.ready) throw new Error(status.detail);
+    const ac = new AbortController();
+    let cost = 0;
+    const { prompt } = this.planPrompt(text, this.conversationContext(input.conversationId ?? null, null));
+    const { plan, errors } = await this.planLoop(
+      prompt,
+      async (p) => {
+        const r = await this.s.runtime.runStructured<Plan>({
+          system: alfredSystem(this.s.agents, this.s.skills), prompt: p, schema: PLAN_SCHEMA, model: config.modelAlfred, signal: ac.signal,
+          maxBudgetUsd: Math.max(0.1, Math.min(2, config.maxCostPerDay - this.spentToday())),
+        });
+        cost += r.costUsd;
+        return r;
+      },
+      () => undefined,
+    );
+    db.insert('previews', { id: newId(), request: text.slice(0, 2000), plan: JSON.stringify(plan), errors: JSON.stringify(errors), cost_usd: cost, created_at: now() });
+    db.audit('usuario', 'plan_preview', { chars: text.length, custo: Number(cost.toFixed(4)), tarefas: plan.tarefas.length, erros: errors.length });
+    return { plan, errors, costUsd: cost };
   }
 
   private async review(e: ExecutionRow, signal: AbortSignal): Promise<Review> {
@@ -379,7 +480,11 @@ export class Engine {
     const prompt = [
       `## Pedido do usuário\n${e.request}`,
       `## Objetivo\n${e.objective ?? ''}`,
-      `## Tarefas\n${tasks.map((t) => `### [${t.key}] ${this.s.agents.get(t.agent_id)?.name} — ${t.title}\nStatus: ${t.status}${t.error ? `\nErro: ${t.error}` : ''}\nResultado:\n${clip(t.result ?? '(sem resultado)', 5000)}`).join('\n\n')}`,
+      `## Tarefas\n${tasks.map((t) => {
+        const crit = (JSON.parse(t.acceptance || '[]') as string[]).map((c) => `  - ${c}`).join('\n');
+        const fact = t.status === 'concluida' ? this.checkOutput(t, this.workspace(e.conversation_id)).note : '';
+        return `### [${t.key}] ${this.s.agents.get(t.agent_id)?.name} — ${t.title}\nStatus: ${t.status}${t.error ? `\nErro: ${t.error}` : ''}\nCritérios de aceite:\n${crit || '  (não definidos)'}\nVerificação objetiva do sistema: ${fact || 'n/a'}${t.cobrancas ? ` (Alfred já cobrou esta tarefa ${t.cobrancas}x)` : ''}${t.check_note ? `\nPendência registrada: ${t.check_note}` : ''}\nResultado:\n${clip(t.result ?? '(sem resultado)', 5000)}`;
+      }).join('\n\n')}`,
       `## Entregáveis registrados nesta execução\n${delivered.join('\n') || 'Nenhum.'}`,
       `## Pedidos de aprovação abertos\n${approvals.map((a) => `- ${a.title} (${a.type}, ${a.status})`).join('\n') || 'Nenhum.'}`,
       e.correction_rounds >= 1 ? 'Já houve uma rodada de correção. Não solicite outra: aprove e relate com fidelidade o que ficou pendente.' : '',
@@ -512,16 +617,18 @@ export class Engine {
     const deps = (JSON.parse(t.depends_on) as string[]).map((k) => all.find((x) => x.key === k)).filter((d): d is TaskRow => !!d);
     const inputs = fs.readdirSync(path.join(ws, 'entrada'));
     const skills = (JSON.parse(t.skills) as string[]).map((id) => this.s.skills.render(id)).filter(Boolean);
-    const knowledge = this.s.knowledge.context(`${t.title} ${t.instructions}`, dept.knowledge);
+    const knowledge = this.s.knowledge.context(`${t.title} ${t.instructions}`, dept.knowledge, 9000, agent.knowledge);
     const prompt = [
       `# Tarefa: ${t.title}`,
       `Pedido original do usuário: ${clip(e.request, 3000)}`,
       `Objetivo da execução: ${e.objective ?? ''}`,
       `## Instruções de Alfred\n${t.instructions}`,
+      (JSON.parse(t.acceptance || '[]') as string[]).length ? `## Critérios de aceite (Alfred vai conferir cada um)\n${(JSON.parse(t.acceptance) as string[]).map((c) => `- ${c}`).join('\n')}` : '',
+      t.expected_output ? `## Entrega esperada\n\`${t.expected_output}\`. Alfred verifica que o arquivo existe, não está vazio e foi registrado com registrar_entregavel.` : '',
       t.error || attempt > 1 ? `## Atenção\nA tentativa anterior falhou${t.error ? `: ${t.error}` : ''}. Verifique o que já existe no workspace antes de refazer.` : '',
       deps.length ? `## Resultados das tarefas das quais você depende\n${deps.map((d) => `### [${d.key}] ${this.s.agents.get(d.agent_id)?.name} — ${d.title}\n${clip(d.result ?? '', 6000)}`).join('\n\n')}` : '',
       `## Workspace\nSeu diretório de trabalho é o workspace compartilhado desta conversa. Arquivos enviados pelo usuário ficam em entrada/ (${inputs.length ? inputs.join(', ') : 'vazio'}). Salve resultados finais em entregas/ e registre-os com a ferramenta registrar_entregavel.`,
-      config.authorizedDirs.length ? `## Pastas locais autorizadas (somente leitura)\n${config.authorizedDirs.join('\n')}` : '',
+      this.authorizedSection('Pastas locais autorizadas (somente leitura; nomes do primeiro nível)'),
       resolved.pending.length ? `## Ferramentas indisponíveis\n${resolved.pending.map((p) => `- ${p.name}: ${p.detail}`).join('\n')}\nNão simule o uso delas. Se forem indispensáveis, explique a lacuna na devolutiva.` : '',
       skills.length ? `## Skills atribuídas (siga as etapas e a validação)\n${skills.join('\n\n---\n\n')}` : '',
       knowledge ? `## Conhecimento da MD2 relevante para esta tarefa\n${knowledge}` : '',
@@ -545,7 +652,7 @@ export class Engine {
 
     // Sessão retomada: o SDK reporta custo e uso ACUMULADOS da sessão. Só o excedente sobre o já
     // contabilizado nesta tarefa é novo gasto (evita contar em dobro as retentativas).
-    const resuming = attempt > 1 && t.session_id ? t.session_id : undefined;
+    const resuming = (attempt > 1 || t.cobrancas > 0) && t.session_id ? t.session_id : undefined;
     const delta = (reported: number) => Math.max(0, reported - (resuming ? t.cost_usd : 0));
     const ac = new AbortController();
     const onAbort = () => ac.abort();
@@ -569,7 +676,19 @@ export class Engine {
       const spent = delta(res.costUsd);
       this.addCost(e.id, spent);
       if (signal.aborted) return;
-      db.update('tasks', t.id, { status: 'concluida', result: res.text, cost_usd: t.cost_usd + spent, session_id: res.sessionId ?? t.session_id, finished_at: now(), ...usageCols(res.usage) });
+      // Cobrança de resultado: confere o que o agente declarou contra o que existe no disco e no banco.
+      const chk = this.checkOutput(t, ws);
+      if (!chk.ok && t.cobrancas < 1) {
+        db.update('tasks', t.id, {
+          status: 'pendente', attempt: attempt - 1, cobrancas: t.cobrancas + 1, check_note: chk.note, cost_usd: t.cost_usd + spent, session_id: res.sessionId ?? t.session_id,
+          instructions: `${t.instructions}\n\n## Cobrança de Alfred\nA verificação encontrou: ${chk.note}. Produza o que falta em ${t.expected_output} e registre com registrar_entregavel. Se acredita que concluiu, explique onde está o resultado.`,
+          ...usageCols(res.usage),
+        });
+        bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: 'tarefa', message: `Alfred cobrou ${agent.name} por "${t.title}": ${chk.note}. A tarefa volta para ajuste.`, data: { status: 'pendente' } });
+        return;
+      }
+      db.update('tasks', t.id, { status: 'concluida', result: res.text, cost_usd: t.cost_usd + spent, session_id: res.sessionId ?? t.session_id, finished_at: now(), check_note: chk.ok ? null : chk.note, ...usageCols(res.usage) });
+      if (!chk.ok) bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: 'erro', message: `${agent.name} concluiu "${t.title}", mas a verificação segue pendente após a cobrança: ${chk.note}`, data: { status: 'concluida' } });
       bus.emit({ executionId: e.id, taskId: t.id, agentId: agent.id, type: 'tarefa', message: `${agent.name} concluiu: ${t.title}`, data: { status: 'concluida' } });
     } catch (err) {
       if (signal.aborted) return;

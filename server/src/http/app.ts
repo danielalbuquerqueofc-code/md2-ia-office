@@ -114,7 +114,8 @@ export function createApp(s: Services, engine: Engine) {
         approvals: db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM approvals WHERE status = 'pendente'`)!.n,
         review: db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM deliverables WHERE status = 'para_revisao'`)!.n,
       },
-      costToday: db.get<{ c: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c FROM executions WHERE created_at >= :d', { d: now().slice(0, 10) })!.c,
+      costToday: db.get<{ c: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c FROM executions WHERE created_at >= :d', { d: now().slice(0, 10) })!.c
+        + db.get<{ c: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c FROM previews WHERE created_at >= :d', { d: now().slice(0, 10) })!.c,
       alfred: s.agents.file.alfred,
     })],
     ['GET', /^\/api\/conversations$/, () => db.all('SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 200')],
@@ -182,6 +183,12 @@ export function createApp(s: Services, engine: Engine) {
       models: { alfred: config.modelAlfred ?? 'padrão da conta', agents: config.modelAgents ?? 'padrão da conta' },
       authorizedDirs: config.authorizedDirs,
     })],
+    ['POST', /^\/api\/plan-preview$/, async (req) => {
+      const b = await readJson(req);
+      if (typeof b.text !== 'string') throw new HttpError(400, 'Campo "text" obrigatório.');
+      try { return await engine.previewPlan({ text: b.text, conversationId: typeof b.conversationId === 'string' ? b.conversationId : undefined }); }
+      catch (e) { throw new HttpError(400, (e as Error).message); }
+    }],
     ['GET', /^\/api\/health\/details$/, () => healthReport(config, db, s.backups, runtimeInfo())],
     ['POST', /^\/api\/runtime\/check$/, async () => {
       db.audit('usuario', 'verificar_runtime');
@@ -200,8 +207,10 @@ export function createApp(s: Services, engine: Engine) {
         FROM tasks t WHERE t.cost_usd > :c OR t.turns > :turns OR t.attempt > 1 ORDER BY t.cost_usd DESC LIMIT 30`,
         { c: config.maxCostPerTask * 0.6, turns: Math.round(config.taskMaxTurns * 0.7) });
       const today = db.get<{ c: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c FROM executions WHERE created_at >= :d', { d: now().slice(0, 10) })!.c;
-      const total = db.get<{ c: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c FROM executions')!.c;
-      return { today, total, limits: { task: config.maxCostPerTask, execution: config.maxCostPerExecution, day: config.maxCostPerDay }, byAgent, byExecution, flagged };
+      const previews = db.get<{ c: number; n: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c, COUNT(*) AS n FROM previews')!;
+      const previewsToday = db.get<{ c: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c FROM previews WHERE created_at >= :d', { d: now().slice(0, 10) })!.c;
+      const total = db.get<{ c: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c FROM executions')!.c + previews.c;
+      return { today: today + previewsToday, total, previews: { count: previews.n, costUsd: previews.c }, limits: { task: config.maxCostPerTask, execution: config.maxCostPerExecution, day: config.maxCostPerDay }, byAgent, byExecution, flagged };
     }],
     ['GET', /^\/api\/backups$/, () => ({ dir: config.backupDir, intervalHours: config.backupIntervalHours, keep: config.backupKeep, snapshots: s.backups.list().map((x) => ({ name: x.name, ...x.manifest })) })],
     ['POST', /^\/api\/backups$/, async () => {
