@@ -21,13 +21,15 @@ export interface Approval {
 }
 export interface Agent {
   id: string; name: string; department: string; departmentName: string; role: string; specialty: string; capabilities: string[];
-  instructions: string[]; limits: string[]; quality: string[]; skills: string[]; knowledge: string[]; provisionalName?: boolean;
+  instructions: string[]; limits: string[]; quality: string[]; skills: string[]; knowledge: string[];
+  nameStatus: 'especificacao' | 'especificacao_condicional' | 'provisorio'; roleStatus: 'especificacao' | 'definido_na_reformulacao';
   tools: Array<{ id: string; name: string; status: string }>; currentTask: { title: string; execution_id: string } | null; completedTasks: number;
 }
 export interface Message { id: string; role: 'user' | 'assistant'; content: string; attachments: Array<{ id: string; name: string }>; execution_id: string | null; created_at: string }
 export interface ExecutionDetail { execution: Execution; tasks: Task[]; events: LiveEvent[]; deliverables: Deliverable[]; approvals: Approval[] }
 export interface AppState {
-  runtime: { ready: boolean; detail: string };
+  runtime: { ready: boolean; detail: string; checkedAt?: string };
+  sandbox: { active: boolean; mode: string; detail: string };
   counts: { running: number; approvals: number; review: number };
   costToday: number;
 }

@@ -23,11 +23,13 @@ export function DeliverablePreview({ deliverable: d, agentName, onClose, onChang
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Um identificador por janela aberta: clique duplo em "Enviar ajustes" não gera duas execuções.
+  const [requestId] = useState(() => crypto.randomUUID());
   const isPage = version.kind === 'site' || version.kind === 'pagina';
 
   const decide = async (decision: 'aprovar' | 'ajustar') => {
     setBusy(true); setError('');
-    try { await api(`/api/deliverables/${d.id}/decision`, { decision, note: note || undefined }); onChanged(); onClose(); }
+    try { await api(`/api/deliverables/${d.id}/decision`, { decision, note: note || undefined, clientRequestId: decision === 'ajustar' ? requestId : undefined }); onChanged(); onClose(); }
     catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };

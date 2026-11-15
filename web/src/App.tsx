@@ -99,6 +99,7 @@ function Shell({ authRequired, onLogout }: { authRequired: boolean; onLogout: ()
           <h1 className="truncate">{TITLES[page] ?? 'MD2 IA Office'}</h1>
           <div className="spacer" />
           {state && !state.runtime.ready && <span className="status-chip" title={state.runtime.detail}><i className="pulse err" /> Runtime offline</span>}
+          {state && !state.sandbox.active && <button className="status-chip" style={{ cursor: 'pointer' }} onClick={() => go('configuracoes')} title={state.sandbox.detail}><i className="pulse err" /> <span className="long">Sem isolamento</span></button>}
           <button className="status-chip" onClick={() => go('execucoes')} title={connected ? 'Conectado em tempo real' : 'Reconectando…'} style={{ cursor: 'pointer' }}>
             <i className={`pulse ${state?.counts.running ? 'on' : connected ? 'ok' : ''}`} />
             {state?.counts.running ? <>{state.counts.running} <span className="long">em execução · {working} agente{working === 1 ? '' : 's'} ativo{working === 1 ? '' : 's'}</span></> : <span>Equipe disponível</span>}
