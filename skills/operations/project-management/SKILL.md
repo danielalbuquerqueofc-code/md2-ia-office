@@ -2,7 +2,7 @@
 name: project-management
 title: Planejamento e gestão de projetos
 description: Transforma um objetivo em plano de projeto com entregas, responsáveis, cronograma, dependências e riscos.
-owners: [marcelo, vanessa, patricia, carlos]
+owners: [thiago]
 triggers: [plano de projeto, cronograma, organizar projeto, status, processo]
 inputs: [objetivo, prazo, equipe e restrições]
 tools: [arquivos]

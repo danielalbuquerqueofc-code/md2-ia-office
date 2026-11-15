@@ -22,7 +22,9 @@ export interface Approval {
 export interface Agent {
   id: string; name: string; department: string; departmentName: string; role: string; specialty: string; capabilities: string[];
   instructions: string[]; limits: string[]; quality: string[]; skills: string[]; knowledge: string[];
-  nameStatus: 'especificacao' | 'especificacao_condicional' | 'provisorio'; roleStatus: 'especificacao' | 'definido_na_reformulacao';
+  identityStatus: string; competenciesStatus: 'proposta_pendente_de_confirmacao' | 'confirmado';
+  secondaryResponsibilities: string[]; toolsForbidden: string[]; receiveWhen: string[]; requestOthersWhen: Array<{ agent: string; when: string }>;
+  autonomy: { level: string; can: string[]; cannot: string[]; needsApproval: string[] }; delivery: { format: string; typical: string[] }; openQuestions: string[];
   tools: Array<{ id: string; name: string; status: string }>; currentTask: { title: string; execution_id: string } | null; completedTasks: number;
 }
 export interface Message { id: string; role: 'user' | 'assistant'; content: string; attachments: Array<{ id: string; name: string }>; execution_id: string | null; created_at: string }

@@ -2,7 +2,7 @@
 name: market-research
 title: Pesquisa de empresa e mercado
 description: Analisa a presença digital de uma empresa (site, Google, Instagram), seu público e concorrentes, e entrega um briefing com fontes para estratégia, textos e design.
-owners: [mariana]
+owners: [lucas, mariana]
 triggers: [analisar empresa, pesquisa de mercado, analisar google e instagram, concorrentes, briefing]
 inputs: [nome da empresa e cidade, links (Google Maps, Instagram, site), materiais em entrada/]
 tools: [web, arquivos, analise_imagem, playwright]

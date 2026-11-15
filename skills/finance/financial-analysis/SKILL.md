@@ -2,7 +2,7 @@
 name: financial-analysis
 title: Análise financeira e precificação
 description: Calcula fluxo de caixa, DRE gerencial, margem, ponto de equilíbrio e preço de serviços com memória de cálculo reproduzível.
-owners: [roberto, aline]
+owners: [renata]
 triggers: [fluxo de caixa, DRE, precificação, quanto cobrar, margem, ponto de equilíbrio, custos]
 inputs: [receitas, custos fixos e variáveis, impostos, horas ou capacidade]
 tools: [arquivos, shell]

@@ -32,7 +32,6 @@ export function Agents({ agents }: { agents: Agent[] }) {
                   <div className="grow"><div style={{ fontWeight: 600 }}>{a.name}</div><div className="small muted truncate">{a.role}</div></div>
                   {a.currentTask ? <Badge status="executando">Em tarefa</Badge> : <Badge status="disponivel" />}
                 </div>
-                {a.nameStatus === 'provisorio' && <span className="tag" style={{ marginTop: 10, display: 'inline-block' }}>Nome provisório</span>}
                 <p className="small muted" style={{ margin: '12px 0' }}>{a.specialty}</p>
                 {a.currentTask ? <div className="small truncate" style={{ color: 'var(--primary)' }}>{a.currentTask.title}</div>
                   : <div className="tags">{a.skills.slice(0, 3).map((s) => <span key={s} className="tag">{skillName(s)}</span>)}</div>}
@@ -46,17 +45,19 @@ export function Agents({ agents }: { agents: Agent[] }) {
           footer={open.currentTask ? <button className="btn" onClick={() => go(`execucoes/${open.currentTask!.execution_id}`)}>Ver execução atual</button> : undefined}>
           <div className="modal-body col" style={{ gap: 18 }}>
             <p>{open.specialty}</p>
-            {open.nameStatus === 'provisorio' && <div className="banner">Nome e função provisórios: o cadastro original deste agente não estava no repositório. Edite <code>agents/registry.json</code> quando tiver o cadastro original.</div>}
-            {open.nameStatus === 'especificacao_condicional' && <div className="banner">Nome citado na especificação de forma condicional ("caso esse seja o nome cadastrado"); não foi possível confirmar com o cadastro original.</div>}
-            {open.nameStatus !== 'provisorio' && open.roleStatus === 'definido_na_reformulacao' && <p className="small muted">Nome informado na especificação; a função foi definida na reformulação e não foi confirmada contra o cadastro original.</p>}
+            {open.competenciesStatus !== 'confirmado' && <div className="banner">Nome, departamento e cargo estão confirmados no cadastro original. As competências abaixo (skills, ferramentas, limites, critérios) são uma proposta <b>pendente de confirmação</b>.</div>}
+            {open.openQuestions.map((q) => <div key={q} className="banner">{q}</div>)}
             <div className="row" style={{ flexWrap: 'wrap' }}>
               <Badge>{open.departmentName}</Badge>
               {open.currentTask ? <Badge status="executando">{open.currentTask.title}</Badge> : <Badge status="disponivel" />}
               <span className="small muted">{open.completedTasks} tarefa{open.completedTasks === 1 ? '' : 's'} concluída{open.completedTasks === 1 ? '' : 's'}</span>
             </div>
             <List title="Capacidades" items={open.capabilities} />
+            <List title="Quando Alfred lhe entrega tarefas" items={open.receiveWhen} />
+            <List title="Não pode" items={open.autonomy.cannot} />
             <div><div className="label" style={{ marginBottom: 6 }}>Skills</div><div className="tags">{open.skills.map((s) => <span key={s} className="tag">{skillName(s)}</span>)}</div></div>
             <div><div className="label" style={{ marginBottom: 6 }}>Ferramentas autorizadas</div><div className="tags">{open.tools.map((t) => <Badge key={t.id} status={t.status}>{t.name}</Badge>)}</div></div>
+            <div><div className="label" style={{ marginBottom: 6 }}>Ferramentas proibidas</div><div className="tags">{open.toolsForbidden.map((t) => <span key={t} className="tag">{t}</span>)}</div></div>
             <div><div className="label" style={{ marginBottom: 6 }}>Bibliotecas de conhecimento</div><div className="tags">{open.knowledge.map((k) => <span key={k} className="tag">{k}</span>)}</div></div>
             <List title="Instruções permanentes" items={open.instructions} />
             <List title="Critérios de qualidade" items={open.quality} />

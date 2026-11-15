@@ -2,7 +2,7 @@
 name: copywriting
 title: Redação de textos de conversão
 description: Escreve os textos finais de sites, landing pages, anúncios e posts, organizados por seção ou peça, na voz da marca e apenas com fatos confirmados.
-owners: [pedro]
+owners: [isabela]
 triggers: [textos do site, copy, redação, legenda, anúncio, headline]
 inputs: [briefing, estratégia de marca, estrutura de seções ou formato da peça]
 tools: [arquivos]

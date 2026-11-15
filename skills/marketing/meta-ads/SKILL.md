@@ -2,7 +2,7 @@
 name: meta-ads
 title: Planejamento de campanhas Meta Ads
 description: Estrutura um plano de campanha no Meta Ads para geração de clientes, com públicos, orçamento, criativos necessários, textos e método de leitura dos resultados.
-owners: [gabriel]
+owners: [pedro]
 triggers: [meta ads, tráfego pago, anúncios no instagram, campanha de leads, facebook ads]
 inputs: [objetivo, oferta, região, orçamento mensal, ativos disponíveis (página, pixel, criativos)]
 tools: [arquivos, web]

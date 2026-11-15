@@ -1,4 +1,8 @@
-/** Gera docs/AGENTES.md: auditoria de cada um dos 22 agentes a partir dos registros reais. */
+/**
+ * Gera docs/MATRIZ_DE_COMPETENCIAS.md e docs/AGENTES.md a partir dos registros reais
+ * (agents/registry.json, skills/, knowledge/ e Tool Registry). Não editar os arquivos gerados à mão.
+ * Uso: npm run docs:agents
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
@@ -10,70 +14,130 @@ import { CLASSIFICATION_LABEL, ToolRegistry } from '../src/registry/tools.js';
 const root = process.cwd();
 const agents = new AgentRegistry(root), knowledge = new KnowledgeEngine(root), skills = new SkillRegistry(root);
 const tools = new ToolRegistry(loadConfig({}, root));
-const NAME: Record<string, string> = { especificacao: 'Confirmado pela especificação', especificacao_condicional: 'Condicional ("caso esse seja o nome cadastrado")', provisorio: '**Provisório**' };
-const ROLE: Record<string, string> = { especificacao: 'Especificação', definido_na_reformulacao: 'Definida na reformulação' };
+const LEVEL = { consultivo: 'Consultivo', producao: 'Produção', execucao_tecnica: 'Execução técnica' } as const;
+const LEVEL_DESC = {
+  consultivo: 'analisa, recomenda e escreve documentos; não executa comandos',
+  producao: 'cria arquivos de entrega no workspace; não executa comandos',
+  execucao_tecnica: 'executa comandos no workspace isolado para construir e testar',
+};
+const list = agents.list();
+const li = (xs: string[]) => xs.map((x) => `- ${x}`).join('\n');
+const toolName = (id: string) => tools.get(id)?.name ?? id;
+const toolState = (id: string) => { const t = tools.get(id)!; return t.status === 'disponivel' ? '' : ` *(${CLASSIFICATION_LABEL[t.classification].toLowerCase()})*`; };
 
-const rows: string[] = [];
-const gaps: string[] = [];
-for (const a of agents.list()) {
+const cards = list.map((a) => {
   const d = agents.department(a.department);
-  const docs = knowledge.docs.filter((k) => d.knowledge.includes(k.department));
-  const own = docs.filter((k) => k.department === a.department).length;
-  const sk = a.skills.map((id) => skills.get(id));
-  const missing = a.skills.filter((_id, i) => !sk[i]);
-  const notOwner = sk.filter((s) => s && !s.owners.includes(a.id)).map((s) => s!.id);
-  const ts = a.tools.map((id) => tools.get(id)!);
-  const usable = ts.filter((t) => t.status === 'disponivel').map((t) => t.name);
-  const blocked = ts.filter((t) => t.status !== 'disponivel').map((t) => `${t.name} (${CLASSIFICATION_LABEL[t.classification].toLowerCase()})`);
-  const limits = a.limits.length + d.limits.length + agents.file.common.limits.length;
-  if (missing.length) gaps.push(`${a.name}: skills inexistentes ${missing.join(', ')}`);
-  if (notOwner.length) gaps.push(`${a.name}: atribuído a ${notOwner.join(', ')}, mas não consta como responsável no SKILL.md`);
-  if (!own) gaps.push(`${a.name} (${d.name}): nenhum documento de conhecimento próprio do departamento; usa bibliotecas de apoio (${d.knowledge.join(', ')}).`);
-  if (blocked.length) gaps.push(`${a.name}: ferramentas autorizadas ainda não utilizáveis: ${blocked.join('; ')}.`);
-  if (a.nameStatus === 'provisorio') gaps.push(`${a.name}: nome provisório; função ${a.role.toLowerCase()} definida na reformulação.`);
-  rows.push(`### ${a.name} — ${a.role}
+  const dels = a.requestOthersWhen.map((r) => `${agents.get(r.agent)!.name}: ${r.when}`);
+  return `### ${a.name} — ${a.role}
 
-| Item | Situação |
+| Campo | Conteúdo |
 |---|---|
-| Departamento | ${d.name} |
-| Nome | ${NAME[a.nameStatus]} |
-| Função | ${ROLE[a.roleStatus]} |
-| Responsabilidade principal | ${a.specialty} |
-| Conhecimento disponível | ${docs.length} documentos (${own} do próprio departamento): ${docs.map((k) => k.id).join(', ')} |
-| Skills | ${a.skills.map((id) => `\`${id}\``).join(', ')}${missing.length ? ` — **inexistentes: ${missing.join(', ')}**` : ''} |
-| Ferramentas utilizáveis | ${usable.join(', ') || 'nenhuma'} |
-| Ferramentas pendentes | ${blocked.join('; ') || '—'} |
-| Limites de atuação | ${limits} regras (${a.limits.length} próprias, ${d.limits.length} do departamento, ${agents.file.common.limits.length} comuns), sempre com aprovação humana para ações externas |
-| Critérios de conclusão | ${a.quality.join(' · ')} |
-| Formato de entrega ao Alfred | Padrão comum: resumo, o que foi feito, arquivos, verificações, pendências; entregáveis via \`registrar_entregavel\` |
-`);
+| **Departamento** | ${d.name} |
+| **Cargo** | ${a.role} *(confirmado no cadastro original)* |
+| **Capacidades originais** | ${a.originalCapabilities.map((c) => `\`${c}\``).join(', ')} |
+| **Nível de autonomia** | ${LEVEL[a.autonomy.level]}: ${LEVEL_DESC[a.autonomy.level]} |
+| **Skills** | ${a.skills.map((s) => `\`${s}\``).join(', ')} |
+| **Conhecimentos especializados** | ${a.knowledge.map((k) => `\`${k}\``).join(', ')} |
+| **Ferramentas permitidas** | ${a.tools.map((t) => toolName(t) + toolState(t)).join(', ')} |
+| **Ferramentas proibidas** | ${a.toolsForbidden.map(toolName).join(', ')} |
+
+**Responsabilidade principal.** ${a.specialty}
+
+**Responsabilidades secundárias.**
+${li(a.secondaryResponsibilities)}
+
+**Limites de autonomia.**
+- Pode: ${a.autonomy.can.join('; ')}.
+- Não pode: ${a.autonomy.cannot.join('; ')}.
+- Exige aprovação humana: ${a.autonomy.needsApproval.length ? a.autonomy.needsApproval.join(', ') : 'nenhuma ação externa; o que produz é rascunho até a sua aprovação'}.
+
+**Quando Alfred lhe entrega tarefas.**
+${li(a.receiveWhen)}
+
+**Quando pede outro agente** (sempre por Alfred, em "Pedidos a Alfred"; não aciona ninguém diretamente).
+${li(dels)}
+
+**Como entrega.** ${a.delivery.format} Arquivos típicos: ${a.delivery.typical.map((t) => `\`${t}\``).join(', ')}.
+
+**Critérios objetivos de qualidade.**
+${li(a.quality)}
+${a.toolNotes.length ? `\n**Notas sobre ferramentas.**\n${li(a.toolNotes)}\n` : ''}${a.openQuestions.length ? `\n**PENDENTE DE CONFIRMAÇÃO.**\n${li(a.openQuestions)}\n` : ''}`;
+});
+
+const toolIds = tools.tools.map((t) => t.id);
+const toolHeader = `| Agente | ${toolIds.map((t) => toolName(t)).join(' | ')} |\n|---|${toolIds.map(() => ':-:').join('|')}|`;
+const toolRows = list.map((a) => `| ${a.name} | ${toolIds.map((t) => (a.tools.includes(t) ? (tools.get(t)!.status === 'disponivel' ? '✓' : '○') : '—')).join(' | ')} |`);
+
+const skillRows = skills.skills.map((s) => `| \`${s.id}\` | ${s.department} | ${s.owners.map((o) => agents.get(o)!.name).join(', ')} | ${s.description.slice(0, 110)}${s.description.length > 110 ? '…' : ''} |`);
+
+const summary = list.map((a) => `| ${a.name} | ${agents.department(a.department).name} | ${a.role} | ${LEVEL[a.autonomy.level]} | ${a.skills.join(', ')} |`);
+
+const matriz = `# Matriz de competências dos 22 agentes
+
+Gerada por \`npm run docs:agents\` a partir de \`agents/registry.json\`, \`skills/\`, \`knowledge/\` e do Tool Registry. **Não editar à mão.**
+
+## Como ler esta matriz
+
+| Camada | Situação |
+|---|---|
+| **Identidade** (nome, departamento, cargo, descrição e capacidades originais) | **Confirmada** no cadastro original (commit \`d4e3933\`). Um teste automatizado falha se divergir. Ver [AGENTES_ORIGINAIS_E_CONFIRMADOS.md](AGENTES_ORIGINAIS_E_CONFIRMADOS.md). |
+| **Competências** (tudo o mais nesta página) | **PENDENTE DE CONFIRMAÇÃO.** Proposta da reformulação; não consta no cadastro original e nunca foi aprovada. O cadastro original dizia só "elabora, planeja, analisa, revisa". |
+
+Alfred é o orquestrador central e **não** é um dos 22. Os agentes não falam com o usuário nem entre si: pedem a Alfred, que decide.
+
+## Visão geral
+
+| Agente | Departamento | Cargo original | Autonomia | Skills |
+|---|---|---|---|---|
+${summary.join('\n')}
+
+Níveis: **Consultivo** (analisa e escreve; sem comandos), **Produção** (cria arquivos de entrega; sem comandos), **Execução técnica** (roda comandos dentro do sandbox do workspace; nada sai dele).
+
+## Ferramentas por agente
+
+✓ disponível e usável · ○ autorizada mas a integração não está conectada (não é usada) · — proibida.
+Só os 6 agentes de **Execução técnica** recebem o shell; a ferramenta "FFmpeg" e a "Transcrição" também passam pelo Bash, então um agente com elas tem o shell completo (dentro do sandbox).
+
+${toolHeader}
+${toolRows.join('\n')}
+
+Ações que agem no mundo externo (publicar, enviar mensagem, gastar, excluir) não são concedidas a nenhum agente: todos preparam e pedem aprovação com \`solicitar_aprovacao\`.
+
+## Skills e responsáveis
+
+| Skill | Área | Responsáveis | Para que serve |
+|---|---|---|---|
+${skillRows.join('\n')}
+
+Todo agente tem pelo menos uma skill que só ele possui (testado), e nenhuma skill existe sem responsável.
+
+## Fichas
+
+${cards.join('\n')}
+`;
+fs.writeFileSync(path.join(root, 'docs', 'MATRIZ_DE_COMPETENCIAS.md'), matriz);
+
+const gaps: string[] = [];
+for (const a of list) {
+  const pend = a.tools.map((t) => tools.get(t)!).filter((t) => t.status !== 'disponivel');
+  if (pend.length) gaps.push(`${a.name}: ferramentas autorizadas ainda não utilizáveis: ${pend.map((t) => `${t.name} (${CLASSIFICATION_LABEL[t.classification].toLowerCase()})`).join('; ')}.`);
+  for (const q of a.openQuestions) gaps.push(`${a.name}: **PENDENTE DE CONFIRMAÇÃO** — ${q}.`);
+  const own = knowledge.docs.filter((k) => k.department === a.department).length;
+  if (!own) gaps.push(`${a.name} (${agents.department(a.department).name}): nenhum documento de conhecimento do próprio departamento; usa ${agents.department(a.department).knowledge.join(', ')}.`);
 }
+const idx = `# Agentes — índice e lacunas
 
-const counts = agents.list().reduce<Record<string, number>>((m, a) => ({ ...m, [a.nameStatus]: (m[a.nameStatus] ?? 0) + 1 }), {});
-const md = `# Auditoria dos 22 agentes
+Gerado por \`npm run docs:agents\`. Detalhes: [MATRIZ_DE_COMPETENCIAS.md](MATRIZ_DE_COMPETENCIAS.md). Origem e evidência: [AGENTES_ORIGINAIS_E_CONFIRMADOS.md](AGENTES_ORIGINAIS_E_CONFIRMADOS.md).
 
-Gerado por \`npm run docs:agents\` a partir de \`agents/registry.json\`, \`skills/\`, \`knowledge/\` e do Tool Registry. Não editar à mão.
+Alfred (${agents.file.alfred.role}) é o orquestrador e não faz parte dos 22.
 
-Alfred é o orquestrador central (${agents.file.alfred.role}) e **não** faz parte dos 22.
+| Agente | Departamento | Cargo (confirmado) | Competências |
+|---|---|---|---|
+${list.map((a) => `| ${a.name} | ${agents.department(a.department).name} | ${a.role} | ${a.competenciesStatus === 'confirmado' ? 'confirmadas' : 'propostas, pendentes'} |`).join('\n')}
 
-## Origem das identidades
-
-| Situação do nome | Quantidade |
-|---|---|
-| Confirmado pela especificação | ${counts.especificacao ?? 0} |
-| Condicional (Patrícia) | ${counts.especificacao_condicional ?? 0} |
-| Provisório | ${counts.provisorio ?? 0} |
-
-Nomes provisórios: ${agents.list().filter((a) => a.nameStatus === 'provisorio').map((a) => `${a.name} (${agents.department(a.department).name})`).join(', ')}.
-
-O cadastro original dos agentes não foi encontrado no repositório (ver \`docs/DIAGNOSTICO.md\`). Nenhuma identidade provisória deve ser tratada como original. Para corrigir, edite \`agents/registry.json\` e mude \`nameStatus\`/\`roleStatus\`.
-
-## Lacunas encontradas
+## Lacunas e pendências
 
 ${gaps.map((g) => `- ${g}`).join('\n')}
-
-## Ficha por agente
-
-${rows.join('\n')}`;
-fs.writeFileSync(path.join(root, 'docs', 'AGENTES.md'), md);
-console.log(`docs/AGENTES.md gerado: ${agents.list().length} agentes, ${gaps.length} lacunas.`);
+`;
+fs.writeFileSync(path.join(root, 'docs', 'AGENTES.md'), idx);
+console.log(`docs/MATRIZ_DE_COMPETENCIAS.md e docs/AGENTES.md gerados: ${list.length} agentes, ${skills.skills.length} skills, ${gaps.length} lacunas/pendências.`);

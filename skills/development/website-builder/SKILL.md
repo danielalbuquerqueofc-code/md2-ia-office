@@ -2,7 +2,7 @@
 name: website-builder
 title: Construção de site profissional
 description: Constrói um site institucional completo, responsivo e com identidade própria a partir de briefing, textos e direção visual, e entrega uma prévia funcional.
-owners: [bruno, thiago]
+owners: [andre]
 triggers: [criar site, site profissional, landing page, página institucional, refazer site]
 inputs: [briefing da empresa (pesquisa), textos por seção, direção visual (tokens), logo e fotos em entrada/ quando houver]
 tools: [arquivos, shell, analise_imagem, playwright]

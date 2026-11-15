@@ -1,7 +1,7 @@
 ---
 name: brand-strategy
 title: Estratégia de marca e comunicação
-description: Define posicionamento, mensagens, tom de voz e direção visual aplicada a partir de um briefing, em formato pronto para textos, design e desenvolvimento.
+description: A partir do posicionamento recebido, define mensagens, tom de voz e direção visual aplicada, em formato pronto para textos, design e desenvolvimento.
 owners: [beatriz]
 triggers: [posicionamento, estratégia de comunicação, identidade visual, tom de voz, estratégia do site]
 inputs: [briefing da empresa, logo e materiais quando houver]
@@ -11,7 +11,7 @@ outputs: [entregas/estrategia/estrategia-marca.md]
 
 ## Etapas
 1. Leia o briefing. Liste o que é fato e o que é lacuna.
-2. Posicionamento em uma frase: para <público>, <empresa> é <categoria> que <benefício principal>, porque <prova>.
+2. Use o posicionamento já definido pela estratégia de campanha (`entregas/estrategia/posicionamento.md`). Se não existir, não o invente: registre em "Pedidos a Alfred" que a Mariana precisa defini-lo antes e trabalhe só com tom e identidade.
 3. Três a cinco mensagens-chave, cada uma ligada a uma prova existente (serviço, avaliação, tempo de atuação confirmado).
 4. Tom de voz: 3 atributos, com um exemplo "assim sim / assim não" para cada.
 5. Direção visual aplicada: paleta em hex (derivada do logo quando existir), tipografia (título e texto, com fallback de sistema), estilo de imagem, elementos gráficos. Justifique pelo público.

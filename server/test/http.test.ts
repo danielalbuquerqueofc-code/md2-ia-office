@@ -72,7 +72,7 @@ describe('API HTTP', () => {
   });
 
   it('fluxo completo: mensagem → eventos em tempo real (SSE) → entregável servido isolado → aprovação', async () => {
-    t.runtime.plans.push(plan([{ chave: 'site', agente: 'bruno' }]));
+    t.runtime.plans.push(plan([{ chave: 'site', agente: 'andre' }]));
     t.runtime.agentImpl = async (o) => {
       expect(fs.readdirSync(path.join(o.cwd, 'entrada'))).toEqual(['logo.png']);
       fs.mkdirSync(path.join(o.cwd, 'entregas/site'), { recursive: true });
@@ -99,8 +99,8 @@ describe('API HTTP', () => {
     await pump;
     await reader.cancel();
     expect(seen).toContain('Alfred recebeu a solicitação.');
-    expect(seen).toContain('Bruno iniciou: Tarefa site');
-    expect(seen).toContain('Bruno registrou o entregável "Site — Padaria" (v1).');
+    expect(seen).toContain('André iniciou: Tarefa site');
+    expect(seen).toContain('André registrou o entregável "Site — Padaria" (v1).');
 
     const detail = await (await call(`/api/executions/${sent.executionId}`)).json();
     expect(detail.execution.status).toBe('concluido');

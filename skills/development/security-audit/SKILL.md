@@ -2,7 +2,7 @@
 name: security-audit
 title: Auditoria de segurança
 description: Revisa código e configuração em busca de segredos expostos, entradas não validadas e práticas inseguras, com recomendações priorizadas.
-owners: [diego, thiago]
+owners: [sofia, andre]
 triggers: [auditoria de segurança, revisar segurança, vazamento de chave, LGPD técnica]
 inputs: [código ou site no workspace]
 tools: [arquivos, shell]

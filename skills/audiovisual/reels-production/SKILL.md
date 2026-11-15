@@ -1,32 +1,34 @@
 ---
 name: reels-production
-title: Produção de Reels (roteiro técnico)
-description: Analisa o material bruto disponível e produz um roteiro técnico de vídeo vertical curto, plano a plano, pronto para a edição executar.
-owners: [leonardo, isabela]
-triggers: [reels, vídeo curto, vídeo para instagram, tiktok, shorts, vídeo de 30 segundos]
-inputs: [pasta de vídeos e fotos (entrada/ ou pasta local autorizada), tema, duração, identidade da marca quando houver]
-tools: [arquivos, shell, ffmpeg, analise_imagem]
-outputs: [entregas/video/roteiro-tecnico.md, quadros de análise em trabalho/analise/]
+title: Roteiro técnico de Reels
+description: Lê o inventário e as folhas de contato do material e escreve o roteiro técnico plano a plano, a legenda e a avaliação honesta do material para um vídeo vertical curto.
+owners: [isabela]
+triggers: [reels, vídeo curto, roteiro de vídeo, legenda de reels, vídeo de 30 segundos]
+inputs: [entregas/video/inventario.md, folhas de contato em trabalho/analise/, tema, duração e identidade da marca]
+tools: [arquivos, web, analise_imagem]
+outputs: [entregas/video/roteiro-tecnico.md, entregas/video/legenda.txt]
 ---
 
 ## Etapas
-1. Localize o material. Procure primeiro em `entrada/`; depois nas pastas locais autorizadas (`find <pasta_autorizada> -maxdepth 4 -iname "*nome*"`). Se a pasta pedida não existir nesses locais, pare e informe exatamente onde procurou — não use outro material.
-2. Inventarie cada arquivo: `ffprobe -v error -show_entries format=duration:stream=codec_type,width,height,r_frame_rate -of csv=p=0 "arquivo"`. Monte uma tabela (arquivo, tipo, duração, resolução, orientação, tem áudio).
-3. Veja o conteúdo de verdade: extraia quadros (`ffmpeg -v error -i "arquivo" -vf "fps=1/2,scale=480:-2" trabalho/analise/NOME_%02d.jpg`) e abra-os com Read. Anote por trecho: o que aparece, qualidade (foco, luz, estabilidade) e utilidade para o tema.
-4. Selecione os melhores trechos para o tema pedido. Prefira movimento, close de produto, pessoas e ambiente.
-5. Estruture a narrativa para a duração pedida: gancho (0–2 s, plano mais forte + texto curto) · desenvolvimento (3 a 6 planos de 2–5 s) · fechamento com chamada para ação (3–4 s). Fotos entram como planos de 2–3 s com movimento lento de zoom.
-6. Escreva `entregas/video/roteiro-tecnico.md` com uma tabela: nº · arquivo · início · fim · duração · enquadramento 9:16 (centro, esquerda, direita ou coordenada) · texto na tela · observações. Some as durações e confira com a duração pedida.
-7. Defina estilo dos textos (fonte disponível no sistema via `fc-list`, cor da marca, posição dentro da área segura: evite os 250 px superiores e os 420 px inferiores em 1080x1920).
-8. Áudio: indique som ambiente dos clipes ou trilha **somente** se houver arquivo de música fornecido/licenciado em `entrada/`. Sem trilha autorizada, registre isso como pendência.
+1. Leia `entregas/video/inventario.md` e abra com Read as folhas de contato. Se o inventário não existir, não o improvise: registre em "Pedidos a Alfred" que o Diego precisa produzi-lo.
+2. Avalie cada arquivo de 1 a 5 para o tema: foco, luz, estabilidade, ação e utilidade narrativa, com a razão. Diga com franqueza se o material **não serve para publicação** e por quê (por exemplo, indícios de material sintético apontados no inventário).
+3. Selecione os melhores trechos e monte a narrativa para a duração pedida: gancho (0–2 s, plano mais forte com texto curto), desenvolvimento (3 a 6 planos de 2–5 s) e fechamento com chamada para ação (3–4 s). Fotos entram como planos de 2–3 s com zoom lento.
+4. Escreva `entregas/video/roteiro-tecnico.md`: tabela com nº, caminho absoluto do arquivo, início, fim, duração, enquadramento 9:16 (centro, esquerda, direita), texto na tela e observações. Some as durações e confira com o pedido.
+5. Defina o estilo dos textos: cor da marca, posição dentro da área segura (evite os 250 px superiores e os 420 px inferiores em 1080x1920) e no máximo 6 palavras por plano.
+6. Áudio: use o som dos clipes ou uma trilha **somente** se houver arquivo licenciado fornecido. Sem trilha autorizada, registre a pendência.
+7. Escreva `entregas/video/legenda.txt` (gancho na primeira linha, blocos curtos, chamada para ação, até 8 hashtags) e indique o quadro da capa (plano e tempo).
 
 ## Validação
-- Todo plano aponta para arquivo existente e para um intervalo dentro da duração do arquivo.
+- Cada plano aponta para arquivo que consta no inventário e para um intervalo dentro da duração dele.
 - A soma das durações bate com o pedido (tolerância de 0,5 s).
-- Textos na tela com até 6 palavras por plano.
+- Nenhum plano usa trecho marcado como preto, congelado ou inutilizável no inventário.
+- A avaliação do material é franca e cita fatos do inventário.
 
 ## Erros
-- Material insuficiente para a duração: proponha a maior duração viável ou o uso de fotos, e explique.
-- Arquivo ilegível pelo ffprobe: exclua do roteiro e liste na devolutiva.
+- Material insuficiente para a duração pedida: proponha a maior duração viável ou o uso de fotos e explique.
+- Material impróprio para publicação: entregue o roteiro como teste de edição, diga isso no topo e liste o que o cliente precisa gravar.
 
 ## Limites
-- Acessar apenas `entrada/` e pastas autorizadas. Não baixar músicas nem vídeos da internet. Não publicar.
+- Você não executa comandos: trabalha só com o inventário e as imagens.
+- Sem música sem licença. Sem publicação: a prévia aguarda aprovação.
+- Não invente cenas que não existem no material.

@@ -26,7 +26,7 @@ describe('motor de orquestração (runtime substituído por dublê de teste)', (
     t.runtime.plans.push(plan([
       { chave: 'pesquisa', agente: 'mariana', skills: ['market-research'] },
       { chave: 'estrategia', agente: 'beatriz' },
-      { chave: 'site', agente: 'bruno', depende_de: ['pesquisa', 'estrategia'], skills: ['website-builder'] },
+      { chave: 'site', agente: 'andre', depende_de: ['pesquisa', 'estrategia'], skills: ['website-builder'] },
     ]));
     const live = new Set<string>();
     let maxLive = 0;
@@ -55,17 +55,17 @@ describe('motor de orquestração (runtime substituído por dublê de teste)', (
     expect(site.prompt).toContain('resultado de pesquisa');
     expect(site.prompt).toContain('Skill: Construção de site profissional');
     expect(site.sdkTools).toContain('Bash');
-    expect(site.system).toContain('Você é Bruno');
+    expect(site.system).toContain('Você é André');
     expect(t.exec(executionId).cost_usd).toBeCloseTo(0.062, 3);
 
     const msgs = t.events(executionId).map((e) => e.message);
     expect(msgs[0]).toBe('Alfred recebeu a solicitação.');
     expect(msgs).toContain('Mariana iniciou: Tarefa pesquisa');
-    expect(msgs).toContain('Bruno concluiu: Tarefa site');
+    expect(msgs).toContain('André concluiu: Tarefa site');
     expect(msgs.at(-1)).toBe('Execução concluída.');
 
     const [d] = t.services.deliverables.list({ executionId });
-    expect(d).toMatchObject({ name: 'Site — Teste', category: 'site', status: 'para_revisao', agent_id: 'bruno' });
+    expect(d).toMatchObject({ name: 'Site — Teste', category: 'site', status: 'para_revisao', agent_id: 'andre' });
     expect(fs.existsSync(path.join(t.dataDir, 'deliverables', d.id, 'v1', 'index.html'))).toBe(true);
   });
 

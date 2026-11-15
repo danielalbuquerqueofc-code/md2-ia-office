@@ -2,7 +2,7 @@
 name: quality-assurance
 title: Garantia de qualidade de entregas digitais
 description: Testa de verdade sites, código e vídeos produzidos pela equipe, corrige problemas objetivos e emite um laudo com evidências.
-owners: [diego]
+owners: [sofia]
 triggers: [testar, QA, validar site, revisar entrega, verificar vídeo]
 inputs: [artefato no workspace (site, código ou vídeo), requisitos do pedido]
 tools: [arquivos, shell, playwright, ffmpeg, analise_imagem]

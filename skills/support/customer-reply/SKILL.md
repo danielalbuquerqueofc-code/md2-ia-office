@@ -2,7 +2,7 @@
 name: customer-reply
 title: Resposta a clientes
 description: Redige respostas a mensagens, dúvidas e reclamações de clientes, alinhadas à política informada, prontas para aprovação.
-owners: [juliana, larissa]
+owners: [juliana, bruno]
 triggers: [responder cliente, reclamação, mensagem de cliente, FAQ, atendimento]
 inputs: [mensagem do cliente, política aplicável, histórico quando houver]
 tools: [arquivos]

@@ -2,9 +2,9 @@
 name: video-editing
 title: Edição de vídeo com FFmpeg
 description: Executa a edição real de um vídeo vertical a partir de roteiro técnico — cortes, enquadramento 9:16, textos, cor, áudio e exportação — e entrega um MP4 reproduzível.
-owners: [isabela]
+owners: [diego]
 triggers: [editar vídeo, montar reels, cortar vídeo, exportar vídeo, legendar]
-inputs: [roteiro técnico, arquivos de vídeo e foto, cores e fonte da marca]
+inputs: [roteiro técnico (reels-production), inventário e folhas de contato (media-inventory), arquivos de vídeo e foto, cores e fonte da marca]
 tools: [arquivos, shell, ffmpeg, analise_imagem]
 outputs: [entregas/video/<nome>.mp4, entregável categoria video]
 ---
