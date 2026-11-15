@@ -132,7 +132,6 @@ export class ClaudeAgentRuntime implements AgentRuntime {
       additionalDirectories: opts.readDirs,
       systemPrompt: opts.system,
       tools: [...opts.sdkTools, 'TodoWrite'],
-      allowedTools: ['mcp__md2__registrar_entregavel', 'mcp__md2__solicitar_aprovacao', 'mcp__md2__consultar_conhecimento'],
       permissionMode: 'default',
       maxTurns: opts.maxTurns,
       maxBudgetUsd: opts.maxBudgetUsd,

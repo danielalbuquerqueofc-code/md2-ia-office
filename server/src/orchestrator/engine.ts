@@ -288,7 +288,7 @@ export class Engine {
     this.setStatus(e.id, 'analisando');
     const ctx = this.conversationContext(e);
     const hits = this.s.knowledge.search(e.request, { limit: 4 });
-    if (hits.length) this.s.bus.emit({ executionId: e.id, type: 'log', message: `Alfred consultou o conhecimento: ${hits.map((h) => h.docId).join(', ')}` });
+    if (hits.length) this.s.bus.emit({ executionId: e.id, type: 'log', message: `Alfred consultou o conhecimento: ${[...new Set(hits.map((h) => h.docId))].join(', ')}` });
     const pending = this.s.tools.tools.filter((t) => t.status !== 'disponivel').map((t) => `- ${t.name}: ${t.detail}`);
     const prompt = [
       ctx.history && `## Conversa até aqui\n${ctx.history}`,
