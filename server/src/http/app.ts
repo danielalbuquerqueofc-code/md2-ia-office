@@ -4,6 +4,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { newId, now } from '../db.js';
+import { errorInfo, log } from '../logger.js';
+import { healthReport } from '../monitor.js';
 import type { Engine, Services } from '../orchestrator/engine.js';
 import { Auth } from './auth.js';
 
@@ -106,6 +108,7 @@ export function createApp(s: Services, engine: Engine) {
   const routes: Array<[string, RegExp, Handler]> = [
     ['GET', /^\/api\/state$/, async () => ({
       runtime: await s.runtime.status(),
+      sandbox: s.runtime.sandbox(),
       counts: {
         running: db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM executions WHERE status NOT IN ('concluido','falhou','cancelado','aguardando_aprovacao')`)!.n,
         approvals: db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM approvals WHERE status = 'pendente'`)!.n,
@@ -160,7 +163,7 @@ export function createApp(s: Services, engine: Engine) {
     ['POST', /^\/api\/deliverables\/([\w-]+)\/decision$/, async (req, _r, m) => {
       const b = await readJson(req);
       if (b.decision !== 'aprovar' && b.decision !== 'ajustar') throw new HttpError(400, 'decision deve ser "aprovar" ou "ajustar".');
-      try { return engine.decideDeliverable(m[1], b.decision, typeof b.note === 'string' ? b.note : undefined); } catch (e) { throw new HttpError(400, (e as Error).message); }
+      try { return engine.decideDeliverable(m[1], b.decision, typeof b.note === 'string' ? b.note : undefined, typeof b.clientRequestId === 'string' ? b.clientRequestId : undefined); } catch (e) { throw new HttpError(400, (e as Error).message); }
     }],
     ['GET', /^\/api\/approvals$/, () => db.all('SELECT * FROM approvals ORDER BY created_at DESC LIMIT 200')],
     ['POST', /^\/api\/approvals\/([\w-]+)\/decision$/, async (req, _r, m) => {
@@ -174,10 +177,44 @@ export function createApp(s: Services, engine: Engine) {
       limits: {
         maxParallelTasks: config.maxParallelTasks, maxParallelExecutions: config.maxParallelExecutions, taskTimeoutMin: config.taskTimeoutMs / 60000,
         taskMaxTurns: config.taskMaxTurns, taskMaxAttempts: config.taskMaxAttempts, maxCostPerExecution: config.maxCostPerExecution, maxCostPerDay: config.maxCostPerDay,
+        maxCostPerTask: config.maxCostPerTask, maxRecoveries: config.maxRecoveries,
       },
       models: { alfred: config.modelAlfred ?? 'padrão da conta', agents: config.modelAgents ?? 'padrão da conta' },
       authorizedDirs: config.authorizedDirs,
     })],
+    ['GET', /^\/api\/health\/details$/, () => healthReport(config, db, s.backups, runtimeInfo())],
+    ['POST', /^\/api\/runtime\/check$/, async () => {
+      db.audit('usuario', 'verificar_runtime');
+      return s.runtime.status(true);
+    }],
+    ['GET', /^\/api\/costs$/, () => {
+      const byAgent = db.all(`SELECT agent_id, COUNT(*) AS tasks, ROUND(SUM(cost_usd), 4) AS cost_usd, ROUND(AVG(cost_usd), 4) AS avg_cost_usd,
+        SUM(turns) AS turns, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, SUM(cache_read_tokens) AS cache_read_tokens
+        FROM tasks GROUP BY agent_id ORDER BY cost_usd DESC`);
+      const byExecution = db.all(`SELECT e.id, c.title, e.status, ROUND(e.cost_usd, 4) AS cost_usd, e.created_at,
+        ROUND(e.cost_usd - COALESCE((SELECT SUM(cost_usd) FROM tasks t WHERE t.execution_id = e.id), 0), 4) AS alfred_cost_usd
+        FROM executions e JOIN conversations c ON c.id = e.conversation_id ORDER BY e.created_at DESC LIMIT 50`);
+      // Sinais de consumo desnecessário: tarefa acima de 60% do teto por tarefa, muitas etapas, ou várias tentativas.
+      const flagged = db.all(`SELECT t.id, t.execution_id, t.agent_id, t.title, ROUND(t.cost_usd, 4) AS cost_usd, t.turns, t.attempt, t.interruptions,
+        CASE WHEN t.cost_usd > :c THEN 'custo alto' WHEN t.turns > :turns THEN 'muitas etapas' ELSE 'várias tentativas' END AS motivo
+        FROM tasks t WHERE t.cost_usd > :c OR t.turns > :turns OR t.attempt > 1 ORDER BY t.cost_usd DESC LIMIT 30`,
+        { c: config.maxCostPerTask * 0.6, turns: Math.round(config.taskMaxTurns * 0.7) });
+      const today = db.get<{ c: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c FROM executions WHERE created_at >= :d', { d: now().slice(0, 10) })!.c;
+      const total = db.get<{ c: number }>('SELECT COALESCE(SUM(cost_usd),0) AS c FROM executions')!.c;
+      return { today, total, limits: { task: config.maxCostPerTask, execution: config.maxCostPerExecution, day: config.maxCostPerDay }, byAgent, byExecution, flagged };
+    }],
+    ['GET', /^\/api\/backups$/, () => ({ dir: config.backupDir, intervalHours: config.backupIntervalHours, keep: config.backupKeep, snapshots: s.backups.list().map((x) => ({ name: x.name, ...x.manifest })) })],
+    ['POST', /^\/api\/backups$/, async () => {
+      db.audit('usuario', 'backup_manual');
+      const snap = await s.backups.create();
+      log.info('backup_criado', { snapshot: snap.name, manual: true });
+      return { name: snap.name, ...snap.manifest };
+    }],
+    ['POST', /^\/api\/backups\/([\w-]+)\/verify$/, (_q, _r, m) => {
+      const snap = s.backups.list().find((x) => x.name === m[1]);
+      if (!snap) throw new HttpError(404, 'Snapshot não encontrado.');
+      return s.backups.verify(snap);
+    }],
     ['POST', /^\/api\/uploads$/, async (req, _r, _m, url) => {
       const name = path.basename(url.searchParams.get('name') ?? '').replace(/[^\w.\- ()À-ÿ]/g, '_').slice(0, 120);
       const ext = path.extname(name).toLowerCase();
@@ -207,19 +244,42 @@ export function createApp(s: Services, engine: Engine) {
     }],
   ];
 
+  // Hosts aceitos no cabeçalho Host/Origin. Bloqueia DNS rebinding: um site malicioso que aponte o
+  // próprio domínio para 127.0.0.1 não consegue falar com a API, mesmo sem senha configurada.
+  const allowedHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]', config.host.toLowerCase(), ...config.allowedHosts]);
+  const hostOk = (h: string | undefined) => {
+    if (!h) return false;
+    const name = h.toLowerCase().replace(/:\d+$/, '');
+    return allowedHosts.has(name) || allowedHosts.has(h.toLowerCase());
+  };
+  const runtimeInfo = () => ({ ready: s.runtime.peek()?.ready ?? null, sandbox: s.runtime.sandbox() });
+
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', 'http://local');
-    const p = decodeURIComponent(url.pathname);
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     try {
-      if (p === '/api/health') return json(res, { ok: true });
+      const url = new URL(req.url ?? '/', 'http://local');
+      let p: string;
+      try { p = decodeURIComponent(url.pathname); } catch { throw new HttpError(400, 'URL inválida.'); }
+      if (!hostOk(req.headers.host)) throw new HttpError(421, 'Host não permitido. Adicione-o em MD2_ALLOWED_HOSTS se for legítimo.');
+      const origin = req.headers.origin;
+      if (origin && origin !== 'null') {
+        let oh = '';
+        try { oh = new URL(origin).host; } catch { /* inválido */ }
+        if (!hostOk(oh)) throw new HttpError(403, 'Origem não permitida.');
+      }
+      // Público e mínimo: serve para monitoramento externo sem expor detalhes.
+      if (p === '/api/health') {
+        const h = healthReport(config, db, s.backups, runtimeInfo());
+        return json(res, { ok: h.ok, status: h.status }, h.ok ? 200 : 503);
+      }
       if (p === '/api/session' && req.method === 'GET') return json(res, { authenticated: auth.check(req), authRequired: auth.required });
       // Proteção CSRF: toda mutação exige cabeçalho próprio (não enviável por formulário de outro site) + cookie SameSite=Strict.
       if (req.method !== 'GET' && req.headers['x-md2'] !== '1') throw new HttpError(403, 'Requisição recusada.');
       if (p === '/api/login' && req.method === 'POST') {
         const b = await readJson(req);
-        const r = auth.login(String(b.password ?? ''), req.socket.remoteAddress ?? '?');
+        const r = auth.login(String(b.password ?? ''), req.socket.remoteAddress ?? '?', req.headers['x-forwarded-proto'] === 'https');
         db.audit('usuario', 'error' in r ? 'login_falhou' : 'login');
         return 'error' in r ? json(res, { error: r.error }, r.status) : json(res, { ok: true }, 200, { 'Set-Cookie': r.cookie });
       }
@@ -263,11 +323,17 @@ export function createApp(s: Services, engine: Engine) {
       return sendFile(req, res, file, { 'Cache-Control': p.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache' });
     } catch (e) {
       if (res.headersSent) return res.end();
-      if (e instanceof HttpError) return json(res, { error: e.message }, e.status);
-      console.error('[http]', e);
+      if (e instanceof HttpError) {
+        if (e.status === 421 || (e.status === 403 && e.message.startsWith('Origem'))) log.warn('http_recusado', { status: e.status, host: req.headers.host, origin: req.headers.origin, path: req.url });
+        return json(res, { error: e.message }, e.status);
+      }
+      log.error('http_erro_interno', { path: req.url, ...errorInfo(e) });
       return json(res, { error: 'Erro interno.' }, 500);
     }
   });
+  // Uploads grandes em conexões lentas: 30 min por requisição; cabeçalhos ainda limitados a 60 s.
+  server.requestTimeout = 30 * 60_000;
+  server.headersTimeout = 60_000;
   server.on('close', () => { clearInterval(heartbeat); for (const r of sse) r.end(); });
   return server;
 }

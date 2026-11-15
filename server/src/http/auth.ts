@@ -21,7 +21,9 @@ export class Auth {
 
   private sign(payload: string) { return createHmac('sha256', this.secret).update(payload).digest('hex'); }
 
-  login(password: string, ip: string): { cookie: string } | { error: string; status: number } {
+  login(password: string, ip: string, secure = false): { cookie: string } | { error: string; status: number } {
+    // Limpeza das entradas expiradas: o mapa de tentativas não cresce sem limite.
+    if (this.attempts.size > 1000) for (const [k, v] of this.attempts) if (v.until < Date.now()) this.attempts.delete(k);
     const a = this.attempts.get(ip);
     if (a && a.until > Date.now() && a.n >= 5) return { error: 'Muitas tentativas. Aguarde alguns minutos.', status: 429 };
     const given = createHmac('sha256', this.secret).update(password).digest();
@@ -32,7 +34,7 @@ export class Auth {
     }
     this.attempts.delete(ip);
     const exp = String(Date.now() + TTL_MS);
-    return { cookie: `${COOKIE}=${exp}.${this.sign(exp)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${TTL_MS / 1000}` };
+    return { cookie: `${COOKIE}=${exp}.${this.sign(exp)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${TTL_MS / 1000}${secure || this.config.cookieSecure ? '; Secure' : ''}` };
   }
   logoutCookie() { return `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`; }
 

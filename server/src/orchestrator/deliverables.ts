@@ -40,9 +40,11 @@ export class Deliverables {
 
   register(input: RegisterInput) {
     const src = path.resolve(input.workspace, input.caminho);
-    const rel = path.relative(input.workspace, src);
-    if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('O caminho precisa estar dentro do workspace.');
+    const outside = (p: string, base: string) => { const r = path.relative(base, p); return r.startsWith('..') || path.isAbsolute(r); };
+    if (outside(src, input.workspace)) throw new Error('O caminho precisa estar dentro do workspace.');
     if (!fs.existsSync(src)) throw new Error(`Arquivo ou pasta não encontrado: ${input.caminho}`);
+    // Resolve links simbólicos em qualquer ponto do caminho: "pasta -> /etc" + "pasta/passwd" é recusado.
+    if (outside(fs.realpathSync.native(src), fs.realpathSync.native(input.workspace))) throw new Error('O caminho aponta para fora do workspace (link simbólico).');
     const stat = fs.lstatSync(src);
     if (stat.isSymbolicLink()) throw new Error('Links simbólicos não podem ser registrados.');
     const name = input.nome.trim().slice(0, 120);

@@ -1,8 +1,14 @@
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk';
-import type { Options } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
+import type { Config } from '../config.js';
+import { log } from '../logger.js';
 import { agentEnv, checkToolUse } from './guard.js';
-import type { AgentRuntime, AgentToolHandlers, RunAgentOptions, RunAgentResult, RunStructuredOptions, RuntimeStatus } from './types.js';
+import type { SandboxStatus } from './sandbox.js';
+import { buildSandbox, detectSandbox } from './sandbox.js';
+import type { AgentRuntime, AgentToolHandlers, RunAgentOptions, RunAgentResult, RunStructuredOptions, RuntimeStatus, Usage } from './types.js';
 import { RuntimeError } from './types.js';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
@@ -68,19 +74,57 @@ const TOOL_LABEL: Record<string, (i: Record<string, unknown>) => string> = {
 };
 const short = (p: unknown) => String(p ?? '').split('/').slice(-2).join('/');
 
+type ResultMessage = Extract<SDKMessage, { type: 'result' }>;
+function usageOf(m: ResultMessage): Usage {
+  const all = Object.values(m.modelUsage ?? {});
+  return {
+    turns: m.num_turns ?? 0,
+    inputTokens: all.reduce((s, u) => s + (u.inputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0), 0),
+    outputTokens: all.reduce((s, u) => s + (u.outputTokens ?? 0), 0),
+    cacheReadTokens: all.reduce((s, u) => s + (u.cacheReadInputTokens ?? 0), 0),
+  };
+}
+
+const RETRY_PROBE_MS = 2 * 60_000;
+
 /** Runtime de produção: cada tarefa é uma sessão independente do Claude Agent SDK, isolada no workspace. */
 export class ClaudeAgentRuntime implements AgentRuntime {
   private cached?: { at: number; value: RuntimeStatus };
+  private probing?: Promise<RuntimeStatus>;
+  private sandboxState: SandboxStatus;
 
-  private base(signal: AbortSignal, model?: string): Options {
+  constructor(private config: Config) {
+    this.sandboxState = detectSandbox(config);
+  }
+
+  peek() {
+    return this.cached?.value ?? null;
+  }
+
+  sandbox() {
+    return { active: this.sandboxState.active, mode: this.sandboxState.mode, detail: this.sandboxState.detail };
+  }
+
+  private base(signal: AbortSignal, model?: string, extraEnv: Record<string, string> = {}): Options {
     const abortController = new AbortController();
     if (signal.aborted) abortController.abort();
     else signal.addEventListener('abort', () => abortController.abort(), { once: true });
-    return { abortController, model, settingSources: [], env: agentEnv(), persistSession: true };
+    return { abortController, model, settingSources: [], env: { ...agentEnv(), ...extraEnv }, persistSession: true };
   }
 
-  async status(): Promise<RuntimeStatus> {
-    if (this.cached && Date.now() - this.cached.at < 5 * 60_000) return this.cached.value;
+  /**
+   * Verificação de conectividade. Custa uma chamada mínima ao modelo, então NÃO é repetida
+   * periodicamente: fica em cache enquanto estiver saudável e só é refeita sob demanda (`force`)
+   * ou, após uma falha, no máximo a cada 2 minutos.
+   */
+  async status(force = false): Promise<RuntimeStatus> {
+    const c = this.cached;
+    if (!force && c && (c.value.ready || Date.now() - c.at < RETRY_PROBE_MS)) return c.value;
+    this.probing ??= this.probe().finally(() => { this.probing = undefined; });
+    return this.probing;
+  }
+
+  private async probe(): Promise<RuntimeStatus> {
     let value: RuntimeStatus;
     try {
       const ac = new AbortController();
@@ -99,7 +143,9 @@ export class ClaudeAgentRuntime implements AgentRuntime {
     } catch (e) {
       value = { ready: false, detail: `Runtime indisponível: ${(e as Error).message}. Configure ANTHROPIC_API_KEY ou faça login no Claude Code.` };
     }
+    value.checkedAt = new Date().toISOString();
     this.cached = { at: Date.now(), value };
+    log[value.ready ? 'info' : 'warn']('runtime_status', { ready: value.ready });
     return value;
   }
 
@@ -111,6 +157,7 @@ export class ClaudeAgentRuntime implements AgentRuntime {
         ...this.base(opts.signal, opts.model),
         tools: [],
         maxTurns: 6,
+        maxBudgetUsd: opts.maxBudgetUsd,
         systemPrompt: opts.system,
         persistSession: false,
         outputFormat: { type: 'json_schema', schema: opts.schema },
@@ -119,15 +166,19 @@ export class ClaudeAgentRuntime implements AgentRuntime {
       if (m.type !== 'result') continue;
       cost = m.total_cost_usd ?? 0;
       if (m.subtype === 'success' && m.structured_output) return { data: m.structured_output as T, costUsd: cost };
-      throw new RuntimeError(`Alfred não conseguiu produzir uma resposta estruturada (${m.subtype}).`, true, cost);
+      throw new RuntimeError(`Alfred não conseguiu produzir uma resposta estruturada (${m.subtype}).`, m.subtype !== 'error_max_budget_usd', cost);
     }
     throw new RuntimeError('O runtime encerrou sem resultado.', true, cost);
   }
 
   async runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
     const ctx = { workspace: opts.cwd, readDirs: opts.readDirs };
+    const tmp = path.join(opts.cwd, '.tmp');
+    fs.mkdirSync(tmp, { recursive: true });
+    const sb = this.sandboxState;
     const options: Options = {
-      ...this.base(opts.signal, opts.model),
+      // TMPDIR dentro do workspace: arquivos temporários de uma tarefa não ficam visíveis para outras.
+      ...this.base(opts.signal, opts.model, { TMPDIR: tmp, TMP: tmp, TEMP: tmp }),
       cwd: opts.cwd,
       additionalDirectories: opts.readDirs,
       systemPrompt: opts.system,
@@ -136,6 +187,9 @@ export class ClaudeAgentRuntime implements AgentRuntime {
       maxTurns: opts.maxTurns,
       maxBudgetUsd: opts.maxBudgetUsd,
       resume: opts.resumeSessionId,
+      ...(sb.active
+        ? { sandbox: buildSandbox({ workspace: opts.cwd, dataDir: opts.dataDir, rootDir: this.config.rootDir, readDirs: opts.readDirs, required: sb.mode === 'required' }) }
+        : {}),
       mcpServers: {
         md2: md2Server(opts.handlers),
         ...(opts.usePlaywright
@@ -145,10 +199,13 @@ export class ClaudeAgentRuntime implements AgentRuntime {
       canUseTool: async (toolName, input) => {
         const d = checkToolUse(toolName, input, ctx);
         if (d.allow) return { behavior: 'allow', updatedInput: input };
-        opts.onActivity({ kind: 'ferramenta', tool: toolName, message: `Bloqueado pelo guard de segurança: ${d.reason}` });
+        opts.onActivity({ kind: 'bloqueio', tool: toolName, message: `Bloqueado pelo guard de segurança: ${d.reason}` });
         return { behavior: 'deny', message: `Ação bloqueada pela política de segurança da MD2: ${d.reason}. Siga por outro caminho dentro do workspace ou solicite aprovação.` };
       },
     };
+    if (this.config.agentSandbox === 'required' && !sb.active) {
+      throw new RuntimeError(`Execução recusada: MD2_AGENT_SANDBOX=required e o isolamento não está disponível. ${sb.detail}`, false);
+    }
 
     let sessionId: string | undefined;
     for await (const m of query({ prompt: opts.prompt, options })) {
@@ -165,13 +222,14 @@ export class ClaudeAgentRuntime implements AgentRuntime {
         }
       } else if (m.type === 'result') {
         const costUsd = m.total_cost_usd ?? 0;
-        if (m.subtype === 'success' && !m.is_error) return { text: m.result, costUsd, sessionId: m.session_id ?? sessionId };
+        const usage = usageOf(m);
+        if (m.subtype === 'success' && !m.is_error) return { text: m.result, costUsd, sessionId: m.session_id ?? sessionId, usage };
         const why =
           m.subtype === 'error_max_turns' ? 'limite de etapas atingido'
           : m.subtype === 'error_max_budget_usd' ? 'limite de custo da tarefa atingido'
           : m.subtype === 'success' ? String(m.result).slice(0, 300)
           : 'erro durante a execução';
-        throw new RuntimeError(`Sessão do agente terminou sem concluir: ${why}.`, m.subtype !== 'error_max_budget_usd', costUsd);
+        throw new RuntimeError(`Sessão do agente terminou sem concluir: ${why}.`, m.subtype !== 'error_max_budget_usd', costUsd, usage);
       }
     }
     throw new RuntimeError('A sessão do agente encerrou sem resultado.', true);

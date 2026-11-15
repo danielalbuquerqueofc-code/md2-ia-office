@@ -1,9 +1,29 @@
+import fs from 'node:fs';
 import path from 'node:path';
 
 export interface GuardContext { workspace: string; readDirs: string[] }
 export type GuardDecision = { allow: true } | { allow: false; reason: string };
 
 const deny = (reason: string): GuardDecision => ({ allow: false, reason });
+/**
+ * Resolve o caminho real seguindo links simbólicos, inclusive quando o arquivo final ainda não existe
+ * (usa o maior ancestral existente). Impede escapar do workspace por um symlink criado pelo agente.
+ */
+export function realResolve(p: string): string {
+  let cur = path.resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(cur), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(p);
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
 const inside = (file: string, dir: string) => {
   const rel = path.relative(dir, file);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
@@ -20,7 +40,7 @@ const BASH_DENY: Array<[RegExp, string]> = [
   [/\b(npm|pnpm|yarn)\s+publish\b|\b(vercel|netlify|firebase|wrangler|flyctl|heroku)\b.*\b(deploy|--prod|publish)\b/, 'deploy/publicação exige aprovação'],
   [/\b(curl|wget)\b[^|;]*\|\s*(ba|z)?sh\b/, 'execução de script remoto'],
   [/\b(ssh|scp|sftp|rsync)\s+\S*@/, 'acesso remoto a outras máquinas'],
-  [/\b(printenv|env)\s*($|\|)|\/proc\/\d*\/?environ|\.env\b|\.ssh\/|\.aws\/|\.claude\/|credentials/, 'acesso a credenciais'],
+  [/\b(printenv|env)\s*($|\|)|\/proc\/(\d+|self)\/?environ|\.env\b|\.ssh\/|\.aws\/|\.claude\/|credentials|ANTHROPIC_|_TOKEN\b|API_KEY|\bdeclare\s+-x|\bexport\s+-p\b|\bset\s*($|\|)/, 'acesso a credenciais'],
   [/\bcrontab\b|\bsystemctl\b|\blaunchctl\b/, 'alteração de serviços do sistema'],
 ];
 
@@ -40,8 +60,10 @@ export function isPrivateUrl(raw: string): boolean {
  * autorizadas, shell sem comandos destrutivos/publicação, rede sem endereços internos.
  */
 export function checkToolUse(tool: string, input: Record<string, unknown>, ctx: GuardContext): GuardDecision {
-  const resolve = (p: unknown) => path.resolve(ctx.workspace, String(p ?? ''));
-  const readable = (file: string) => inside(file, ctx.workspace) || ctx.readDirs.some((d) => inside(file, d));
+  const ws = realResolve(ctx.workspace);
+  const dirs = ctx.readDirs.map(realResolve);
+  const resolve = (p: unknown) => realResolve(path.resolve(ctx.workspace, String(p ?? '')));
+  const readable = (file: string) => inside(file, ws) || dirs.some((d) => inside(file, d));
 
   if (tool.startsWith('mcp__md2__')) return { allow: true };
   if (tool.startsWith('mcp__playwright__')) {
@@ -53,7 +75,7 @@ export function checkToolUse(tool: string, input: Record<string, unknown>, ctx: 
     case 'Edit':
     case 'NotebookEdit': {
       const file = resolve(input.file_path ?? input.notebook_path);
-      return inside(file, ctx.workspace) ? { allow: true } : deny(`escrita fora do workspace bloqueada: ${file}`);
+      return inside(file, ws) ? { allow: true } : deny(`escrita fora do workspace bloqueada: ${file}`);
     }
     case 'Read': {
       const file = resolve(input.file_path);
@@ -71,6 +93,11 @@ export function checkToolUse(tool: string, input: Record<string, unknown>, ctx: 
     }
     case 'WebFetch':
       return isPrivateUrl(String(input.url ?? '')) ? deny('acesso a endereço interno bloqueado') : { allow: true };
+    case 'SandboxNetworkAccess': {
+      // Pedido de rede vindo de um comando dentro do sandbox de SO. Hosts internos nunca.
+      const host = String(input.host ?? '');
+      return !host || isPrivateUrl(`http://${host}`) ? deny(`rede interna bloqueada: ${host}`) : { allow: true };
+    }
     case 'WebSearch':
     case 'TodoWrite':
       return { allow: true };
