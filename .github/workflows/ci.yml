@@ -18,6 +18,8 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - name: Ferramentas usadas pelos testes (FFmpeg, bubblewrap, socat)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg bubblewrap socat
       - run: npm ci
       - run: npm run typecheck
       - run: npm test

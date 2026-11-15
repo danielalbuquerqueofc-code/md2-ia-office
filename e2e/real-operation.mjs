@@ -2,17 +2,39 @@
 // (sem navegador), derruba o processo com SIGKILL no meio de uma tarefa, reinicia, confirma a retomada
 // automática, confere entregáveis e registra uma aprovação em ambiente de teste — nada é publicado.
 // Uso: npm run build && node e2e/real-operation.mjs "<pedido>" [--sem-queda] [--dados=./data-noturno]
-import { spawn } from 'node:child_process';
+//
+// MODO CENÁRIO (validação comercial): o pedido é montado só com o que você informar e o resultado é verificado de forma
+// independente. O cenário B só é classificado como VALIDADO com material que você atesta ser real (--material-real) e que o
+// preflight não aponta como sintético.
+//   node e2e/real-operation.mjs --cenario=b --pasta="C:\Clientes\Pão de Mel" --tema="o café da tarde" --material-real
+//   node e2e/real-operation.mjs --cenario=a --maps=URL --instagram=URL [--site=URL] [--briefing="..."] [--anexos=logo.png,foto1.jpg]
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { classify, SCENARIOS } from './scenarios.mjs';
+import { verifySite, verifyVideo } from './verify.mjs';
 
 const args = process.argv.slice(2);
-const pedido = args.find((a) => !a.startsWith('--'));
-if (!pedido) { console.error('Informe o pedido.'); process.exit(2); }
-const semQueda = args.includes('--sem-queda');
+const opt = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+const cenario = opt('cenario')?.toLowerCase();
+if (cenario && !SCENARIOS[cenario]) { console.error('--cenario deve ser a ou b.'); process.exit(2); }
+const anexos = (opt('anexos') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const pasta = opt('pasta') ? path.resolve(opt('pasta')) : undefined;
+const duracao = Number(opt('duracao') ?? 30);
+let pedido = args.find((a) => !a.startsWith('--'));
+if (cenario) {
+  if (cenario === 'b' && (!pasta || !opt('tema'))) { console.error('Cenário B exige --pasta e --tema.'); process.exit(2); }
+  if (cenario === 'a' && !opt('maps') && !opt('instagram') && !opt('site')) { console.error('Cenário A exige ao menos --maps, --instagram ou --site.'); process.exit(2); }
+  pedido = SCENARIOS[cenario].prompt({ pasta, tema: opt('tema'), duracao, maps: opt('maps'), instagram: opt('instagram'), site: opt('site'), briefing: opt('briefing'), anexos });
+}
+if (!pedido) { console.error('Informe o pedido ou use --cenario=a|b.'); process.exit(2); }
+// No modo cenário a queda forçada fica desligada (já foi validada à parte); use --com-queda para incluí-la.
+const semQueda = cenario ? !args.includes('--com-queda') : args.includes('--sem-queda');
 const dataDir = path.resolve(args.find((a) => a.startsWith('--dados='))?.slice(8) ?? './data-noturno');
 const port = Number(args.find((a) => a.startsWith('--porta='))?.slice(8) ?? 4397), base = `http://127.0.0.1:${port}`, senha = 'teste-operacao-noturna';
 const env = { ...process.env, MD2_PORT: String(port), MD2_DATA_DIR: dataDir, MD2_BACKUP_DIR: `${dataDir}-backups`, MD2_ADMIN_PASSWORD: senha };
+// Cenário B: este servidor de teste lê SOMENTE a pasta que você indicou (nunca a pasta-mãe nem o disco).
+if (cenario === 'b') env.MD2_AUTHORIZED_DIRS = pasta;
 const t0 = Date.now();
 const log = (m) => console.log(`[${String(Math.round((Date.now() - t0) / 1000)).padStart(4)}s] ${m}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -40,6 +62,24 @@ async function login() {
   cookie = r.headers.get('set-cookie').split(';')[0];
 }
 
+let preflight;
+if (cenario) {
+  const saida = `${dataDir}-preflight.json`;
+  const pa = ['tsx', 'server/scripts/preflight.ts', `--cenario=${cenario}`, `--saida=${saida}`];
+  if (cenario === 'b') pa.push(`--pasta=${pasta}`, `--duracao=${duracao}`);
+  else for (const k of ['maps', 'instagram', 'site']) if (opt(k)) pa.push(`--${k}=${opt(k)}`);
+  if (anexos[0]) pa.push(`--logo=${anexos[0]}`);
+  log(`preflight: npx ${pa.join(' ')}`);
+  const pf = spawnSync('npx', pa, { env, stdio: 'inherit' });
+  preflight = fs.existsSync(saida) ? JSON.parse(fs.readFileSync(saida, 'utf8')) : undefined;
+  report.preflight = preflight;
+  if (pf.status !== 0) { console.error('\nPreflight BLOQUEADO: nada foi executado nem gasto. Corrija os bloqueios acima.'); process.exit(1); }
+  if (cenario === 'b' && preflight?.suspectedSynthetic && !args.includes('--teste-tecnico')) {
+    console.error('\nMaterial suspeito de ser sintético ou de teste: esta execução jamais poderia ser classificada como validação do cenário B, então nada foi executado nem gasto.\nPara rodar mesmo assim apenas como TESTE TÉCNICO (sempre classificado NÃO VALIDADO), acrescente --teste-tecnico.');
+    process.exit(1);
+  }
+}
+
 try {
   start(); await waitUp(); await login();
   let state = (await api('/api/state')).data;
@@ -47,8 +87,17 @@ try {
   check(state.sandbox?.active === true, 'sandbox de SO ativo para os agentes', state.sandbox?.detail);
   check(state.runtime?.ready === true, 'runtime conectado', state.runtime?.detail);
 
+  const uploads = [];
+  for (const f of anexos) {
+    if (!fs.existsSync(f)) throw new Error(`anexo não encontrado: ${f}`);
+    const r = await fetch(`${base}/api/uploads?name=${encodeURIComponent(path.basename(f))}`, { method: 'POST', headers: { cookie, 'x-md2': '1' }, body: fs.readFileSync(f) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(`upload de ${f} recusado: ${j.error}`);
+    uploads.push({ id: j.id, name: j.name });
+    log(`anexo enviado: ${j.name} (${j.size} bytes)`);
+  }
   const reqId = `real-${Date.now()}`;
-  const sent = (await api('/api/messages', { text: pedido, clientRequestId: reqId })).data;
+  const sent = (await api('/api/messages', { text: pedido, attachments: uploads, clientRequestId: reqId })).data;
   const dup = (await api('/api/messages', { text: pedido, clientRequestId: reqId })).data;
   check(dup.executionId === sent.executionId && dup.duplicate === true, 'reenvio com o mesmo identificador não duplica a execução');
   const id = sent.executionId;
@@ -120,11 +169,34 @@ try {
   check(audit.includes('mensagem') && (!pend.length || audit.includes('aprovacao_aprovar')), 'trilha de auditoria registrou mensagem e decisões');
   const costs = (await api('/api/costs')).data;
   report.custos = { execucao: e.cost_usd, porAgente: costs.byAgent, alertas: costs.flagged };
+
+  if (cenario) {
+    // Verificação INDEPENDENTE: mede os arquivos, sem confiar no que os agentes relataram.
+    const local = (dv) => path.join(dataDir, 'deliverables', dv.id, `v${dv.versions[0].version}`);
+    let independent = [];
+    if (cenario === 'a') {
+      const site = d.deliverables.find((x) => x.versions[0]?.kind === 'site');
+      independent = site ? await verifySite(local(site), { evidenceDir: `${dataDir}-evidencias` }) : [{ ok: false, nome: 'entregável de site existe', detalhe: 'nenhum' }];
+    } else {
+      const vid = d.deliverables.find((x) => x.versions[0]?.kind === 'video');
+      independent = vid ? verifyVideo(path.join(local(vid), vid.versions[0].entry), { seconds: duracao }) : [{ ok: false, nome: 'entregável de vídeo existe', detalhe: 'nenhum' }];
+      const cap = d.deliverables.some((x) => /legenda/i.test(x.name) || /legenda/i.test(x.versions[0]?.entry ?? ''));
+      independent.push({ ok: cap, nome: 'legenda entregue', detalhe: cap ? '' : 'nenhum entregável de legenda' });
+    }
+    for (const c of independent) check(c.ok, `verificação independente: ${c.nome}`, c.detalhe);
+    report.verificacaoIndependente = independent;
+    const avisos = [...(preflight?.warnings ?? [])];
+    report.classificacao = classify({ cenario, execStatus: e.status, independentChecks: independent, sandboxActive: state.sandbox?.active === true, tasks: d.tasks, deliverables: d.deliverables, materialAtestado: args.includes('--material-real'), preflight, avisos });
+    const c = report.classificacao;
+    log(`CLASSIFICAÇÃO DO CENÁRIO ${cenario.toUpperCase()}: ${c.nivel}`);
+    for (const m of c.motivos) log(`  ✗ ${m}`);
+    for (const a of c.avisos) log(`  ressalva: ${a}`);
+  }
 } catch (err) {
   check(false, 'erro no roteiro de teste', err.message);
 } finally {
   if (proc && proc.exitCode === null) { proc.kill('SIGTERM'); await new Promise((r) => setTimeout(r, 800)); }
-  report.ok = report.checks.every((c) => c.ok);
+  report.ok = report.classificacao ? report.classificacao.nivel !== 'NAO_VALIDADO' : report.checks.every((c) => c.ok);
   const out = `${dataDir}-relatorio.json`;
   fs.writeFileSync(out, JSON.stringify(report, null, 2));
   log(`relatório: ${out} · ${report.checks.filter((c) => c.ok).length}/${report.checks.length} verificações OK`);
